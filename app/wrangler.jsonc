@@ -1,12 +1,16 @@
-// Static-assets Worker serving the app at necxsoft.com/perps-and-predictions/.
-// The route only matches that path, so the rest of necxsoft.com keeps being served as before.
+// Worker behind necxsoft.com/perps-and-predictions/*: serves the web app, runs the keeper on a
+// one-minute cron and hosts the devnet faucet (worker/index.ts). The route only matches this
+// path, so the rest of necxsoft.com keeps being served as before.
 //   npm run deploy:web
+//   wrangler secret put KEEPER_SECRET_KEY < ~/.config/solana/necxsoft-keeper.json
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "necxsoft-perps-and-predictions",
+  "main": "worker/index.ts",
   "compatibility_date": "2026-10-01",
   "assets": {
     "directory": "./dist-web",
+    "binding": "ASSETS",
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "none"
   },
@@ -14,5 +18,9 @@
     { "pattern": "necxsoft.com/perps-and-predictions*", "zone_name": "necxsoft.com" },
     { "pattern": "www.necxsoft.com/perps-and-predictions*", "zone_name": "necxsoft.com" }
   ],
+  "triggers": { "crons": ["* * * * *"] },
+  "vars": { "RPC_URL": "https://api.devnet.solana.com" },
+  "kv_namespaces": [{ "binding": "FAUCET", "id": "0c3206507bf949e68efae115872819a4" }],
+  "observability": { "enabled": true },
   "workers_dev": false
 }

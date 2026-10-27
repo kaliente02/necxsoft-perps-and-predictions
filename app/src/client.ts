@@ -21,3 +21,7 @@ export function explorerTxUrl(signature: string): string {
 }
 
 export const NETWORK_LABEL = CHAIN.replace('solana:', '');
+
+/** Devnet faucet served by the Worker (worker/index.ts); unset on other clusters. */
+export const FAUCET_URL: string | undefined =
+  import.meta.env.VITE_FAUCET_URL || (CHAIN === 'solana:devnet' ? 'https://necxsoft.com/perps-and-predictions/api/faucet' : undefined);

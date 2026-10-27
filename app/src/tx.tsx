@@ -11,6 +11,8 @@ type Build = (signer: TransactionSigner) => Promise<Instruction[]>;
 type TxContextValue = {
   run: (label: string, build: Build) => void;
   isRunning: boolean;
+  /** Show a toast for work that isn't a wallet transaction (e.g. the faucet). */
+  notify: (toast: Omit<Toast, 'id'>) => void;
 };
 
 const TxContext = createContext<TxContextValue | null>(null);
@@ -95,9 +97,16 @@ export function TxProvider({ children }: { children: ReactNode }) {
   });
 
   const run = useCallback((label: string, build: Build) => action.dispatch(label, build), [action.dispatch]);
+  const notify = useCallback(
+    (toast: Omit<Toast, 'id'>) => {
+      upsert({ ...toast, id: nextId.current++ });
+      if (toast.kind === 'success') mutate(() => true);
+    },
+    [upsert, mutate],
+  );
 
   return (
-    <TxContext.Provider value={{ run, isRunning: action.isRunning }}>
+    <TxContext.Provider value={{ run, isRunning: action.isRunning, notify }}>
       {children}
       <div className="toasts" role="status" aria-live="polite">
         {toasts.map((t) => (

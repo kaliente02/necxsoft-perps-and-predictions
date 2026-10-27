@@ -7,7 +7,8 @@ import {
   useDisconnect,
   useWallets,
 } from '@solana/kit-plugin-wallet/react';
-import { type AppClient, NETWORK_LABEL } from '../client';
+import { type AppClient, FAUCET_URL, NETWORK_LABEL, explorerTxUrl } from '../client';
+import { useTx } from '../tx';
 import { formatUsd } from '../lib/perps';
 
 export type Page = 'trade' | 'predict' | 'earn';
@@ -32,6 +33,43 @@ function useDismiss(open: boolean, close: () => void) {
   return ref;
 }
 
+function FaucetButton({ address, usdcBalance }: { address: string; usdcBalance: bigint | undefined }) {
+  const { notify } = useTx();
+  const [busy, setBusy] = useState(false);
+  if (!FAUCET_URL) return null;
+  return (
+    <button
+      className={`btn btn-small ${usdcBalance === 0n ? 'btn-primary' : 'btn-secondary'} faucet-btn`}
+      disabled={busy}
+      title="Get 1,000 test USDC (and a little devnet SOL for fees) once a day"
+      onClick={async () => {
+        setBusy(true);
+        try {
+          const response = await fetch(FAUCET_URL!, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ wallet: address }),
+          });
+          const body = (await response.json()) as { error?: string; usdc?: string; sol?: number; signature?: string };
+          if (!response.ok) throw new Error(body.error ?? `Faucet error ${response.status}`);
+          notify({
+            kind: 'success',
+            title: 'Test funds sent',
+            body: `${body.usdc} USDC${body.sol ? ` and ${body.sol} SOL` : ''} are in your wallet.`,
+            href: body.signature ? explorerTxUrl(body.signature) : undefined,
+          });
+        } catch (e) {
+          notify({ kind: 'error', title: 'Test funds', body: (e as Error).message });
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      {busy ? 'Sending…' : 'Get test USDC'}
+    </button>
+  );
+}
+
 function WalletButton({ usdcBalance }: { usdcBalance: bigint | undefined }) {
   const client = useClient<AppClient>();
   const wallets = useWallets(client);
@@ -46,6 +84,7 @@ function WalletButton({ usdcBalance }: { usdcBalance: bigint | undefined }) {
     const address = connected.account.address;
     return (
       <div className="wallet" ref={ref}>
+        <FaucetButton address={address} usdcBalance={usdcBalance} />
         <button className="btn btn-secondary wallet-trigger" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
           {connected.wallet.icon && <img src={connected.wallet.icon} alt="" width={18} height={18} />}
           <span className="wallet-address">{shorten(address)}</span>

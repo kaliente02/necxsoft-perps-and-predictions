@@ -160,7 +160,7 @@ button { font: inherit; color: inherit; }
 .status-dot { margin-right: 6px; vertical-align: 1px; }
 .nav-balance { font-size: 13px; color: var(--text-muted); padding: 0 6px; }
 
-.wallet { position: relative; }
+.wallet { position: relative; display: flex; align-items: center; gap: 8px; }
 .wallet-trigger { gap: 8px; }
 .wallet-address { font-family: var(--font-mono); font-size: 13px; }
 .chevron { transition: transform 0.2s var(--ease); opacity: 0.7; }
@@ -683,3 +683,5 @@ a.book-price:hover { text-decoration: underline; }
   .chart-row { grid-template-columns: minmax(0, 1fr); }
   .book-side.trades { max-height: 280px; }
 }
+
+@media (max-width: 760px) { .faucet-btn { padding: 0 10px; font-size: 12px; } }
