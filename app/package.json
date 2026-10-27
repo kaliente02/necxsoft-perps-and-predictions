@@ -1,0 +1,48 @@
+{
+  "name": "perps-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "codegen": "node scripts/codegen.mjs",
+    "setup": "tsx scripts/setup.ts",
+    "keeper": "tsx scripts/keeper.ts",
+    "typecheck": "tsc -b",
+    "smoke": "tsx scripts/smoke.ts",
+    "dev:devnet": "vite --mode devnet",
+    "build:devnet": "tsc -b && vite build --mode devnet",
+    "setup:devnet": "RPC_URL=https://api.devnet.solana.com tsx scripts/setup.ts",
+    "keeper:devnet": "RPC_URL=https://api.devnet.solana.com tsx scripts/keeper.ts",
+    "build:web": "BASE_PATH=/perps-and-predictions/ tsc -b && BASE_PATH=/perps-and-predictions/ vite build --mode devnet --outDir dist-web/perps-and-predictions --emptyOutDir",
+    "deploy:web": "npm run build:web && wrangler deploy"
+  },
+  "dependencies": {
+    "@solana-program/system": "^0.16.0",
+    "@solana-program/token": "^0.18.0",
+    "@solana/kit": "^8.5.0",
+    "@solana/kit-plugin-rpc": "^0.22.0",
+    "@solana/kit-plugin-signer": "^0.19.0",
+    "@solana/kit-plugin-wallet": "^0.22.0",
+    "@solana/program-client-core": "^8.5.0",
+    "@solana/react": "^8.5.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "swr": "^2.5.1"
+  },
+  "devDependencies": {
+    "@codama/nodes-from-anchor": "^1.5.6",
+    "@codama/renderers-js": "^2.8.0",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "codama": "^1.11.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "wrangler": "^4.153.0"
+  }
+}

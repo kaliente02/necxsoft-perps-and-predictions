@@ -1,0 +1,22 @@
+skip_local_validator = true
+
+[toolchain]
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+my_defi_dapp = "4WLW48GwhBK9vtzL5GSbAUNioBVH5iFL6QKwGYNxMd8B"
+
+[programs.devnet]
+my_defi_dapp = "4WLW48GwhBK9vtzL5GSbAUNioBVH5iFL6QKwGYNxMd8B"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "cargo test"
+
+[hooks]

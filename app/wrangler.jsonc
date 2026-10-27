@@ -1,0 +1,18 @@
+// Static-assets Worker serving the app at necxsoft.com/perps-and-predictions/.
+// The route only matches that path, so the rest of necxsoft.com keeps being served as before.
+//   npm run deploy:web
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "necxsoft-perps-and-predictions",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist-web",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "none"
+  },
+  "routes": [
+    { "pattern": "necxsoft.com/perps-and-predictions*", "zone_name": "necxsoft.com" },
+    { "pattern": "www.necxsoft.com/perps-and-predictions*", "zone_name": "necxsoft.com" }
+  ],
+  "workers_dev": false
+}
