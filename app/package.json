@@ -17,7 +17,8 @@
     "setup:devnet": "RPC_URL=https://api.devnet.solana.com tsx scripts/setup.ts",
     "keeper:devnet": "RPC_URL=https://api.devnet.solana.com tsx scripts/keeper.ts",
     "build:web": "BASE_PATH=/perps-and-predictions/ tsc -b && BASE_PATH=/perps-and-predictions/ vite build --mode devnet --outDir dist-web/perps-and-predictions --emptyOutDir",
-    "deploy:web": "npm run build:web && wrangler deploy"
+    "deploy:web": "npm run build:web && wrangler deploy",
+    "deploy": "npm run deploy:web"
   },
   "dependencies": {
     "@solana-program/system": "^0.16.0",
