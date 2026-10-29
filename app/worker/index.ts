@@ -4,7 +4,7 @@
 //  - POST /perps-and-predictions/api/faucet {wallet}: devnet test USDC (+ a little SOL for fees)
 //
 // Secrets:  KEEPER_SECRET_KEY  (JSON byte array of the keeper keypair; wrangler secret put)
-// Vars:     RPC_URL
+//           RPC_URL            (devnet RPC with an API key; the public endpoint blocks Workers)
 import { type Address, createClient, createKeyPairSignerFromBytes, isAddress, lamports } from '@solana/kit';
 import { solanaRpc } from '@solana/kit-plugin-rpc';
 import { signer } from '@solana/kit-plugin-signer';
@@ -31,9 +31,13 @@ type Env = {
   RPC_URL: string;
 };
 
-const TICK_MS = 10_000;
-/** Ticks per cron run: a run starts every minute, so this keeps prices under ~10 s old. */
-const TICKS_PER_RUN = 6;
+const TICK_MS = 30_000;
+/**
+ * Ticks per cron run: a run starts every minute, so prices stay under ~30 s old (the program
+ * rejects prices older than 120 s). A tick makes ~15 subrequests and the Workers Free plan
+ * allows 50 per invocation, so more ticks per run fail with "Too many subrequests".
+ */
+const TICKS_PER_RUN = 2;
 const FAUCET_USDC = 1_000n * USD;
 const FAUCET_SOL = 50_000_000n; // 0.05 SOL, for fees and account rent
 const SOL_TOP_UP_BELOW = 20_000_000n;

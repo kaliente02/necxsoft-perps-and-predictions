@@ -3,6 +3,7 @@
 // path, so the rest of necxsoft.com keeps being served as before.
 //   npm run deploy:web
 //   wrangler secret put KEEPER_SECRET_KEY < ~/.config/solana/necxsoft-keeper.json
+//   wrangler secret put RPC_URL   (a devnet RPC with an API key; api.devnet.solana.com blocks Workers)
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "necxsoft-perps-and-predictions",
@@ -19,7 +20,6 @@
     { "pattern": "www.necxsoft.com/perps-and-predictions*", "zone_name": "necxsoft.com" }
   ],
   "triggers": { "crons": ["* * * * *"] },
-  "vars": { "RPC_URL": "https://api.devnet.solana.com" },
   "kv_namespaces": [{ "binding": "FAUCET", "id": "0c3206507bf949e68efae115872819a4" }],
   "observability": { "enabled": true },
   "workers_dev": false

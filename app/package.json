@@ -14,8 +14,8 @@
     "smoke": "tsx scripts/smoke.ts",
     "dev:devnet": "vite --mode devnet",
     "build:devnet": "tsc -b && vite build --mode devnet",
-    "setup:devnet": "RPC_URL=https://api.devnet.solana.com tsx scripts/setup.ts",
-    "keeper:devnet": "RPC_URL=https://api.devnet.solana.com tsx scripts/keeper.ts",
+    "setup:devnet": "RPC_URL=${RPC_URL:-https://api.devnet.solana.com} tsx scripts/setup.ts",
+    "keeper:devnet": "RPC_URL=${RPC_URL:-https://api.devnet.solana.com} tsx scripts/keeper.ts",
     "build:web": "BASE_PATH=/perps-and-predictions/ tsc -b && BASE_PATH=/perps-and-predictions/ vite build --mode devnet --outDir dist-web/perps-and-predictions --emptyOutDir",
     "deploy:web": "npm run build:web && wrangler deploy",
     "deploy": "npm run deploy:web"

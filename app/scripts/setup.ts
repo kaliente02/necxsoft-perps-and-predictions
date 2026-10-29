@@ -3,6 +3,7 @@
 //   npm run setup -- init                 create mock USDC, initialize exchange, add SOL/BTC/ETH markets
 //   npm run setup -- faucet <wallet> [n]  mint n (default 10,000) mock USDC to a wallet
 //   npm run setup -- seed [n]             mint n (default 100,000) mock USDC to the admin and deposit it as pool liquidity
+//   npm run setup -- set-oracle <address> make <address> every market's oracle authority (keeps borrow rate and OI cap)
 //
 // Prediction markets (liquidity in USDC, minted to the admin as needed):
 //   npm run setup -- predict-price <SYMBOL> <strike> <hours> [liquidity]
@@ -20,6 +21,7 @@ import {
   findInitializeVaultPda,
   getAddMarketInstruction,
   getInitializeInstruction,
+  getUpdateMarketInstruction,
 } from '../src/generated';
 import { type PerpsState, USD, formatUsd, liquidityIxs, loadPerpsState, marketPda, newOrderId, poolAum, tokenBalance } from '../src/lib/perps';
 import {
@@ -50,6 +52,8 @@ if (command === 'init') {
   await faucet(args[0], args[1]);
 } else if (command === 'seed') {
   await seed(args[0]);
+} else if (command === 'set-oracle') {
+  await setOracle(args[0]);
 } else if (command === 'predict-price') {
   await predictPrice(args[0], args[1], args[2], args[3]);
 } else if (command === 'predict-custom') {
@@ -62,7 +66,7 @@ if (command === 'init') {
   await predictWithdraw(args[0]);
 } else {
   console.log(
-    'usage: npm run setup -- init | faucet <wallet> [amount] | seed [amount] | predict-price | predict-custom | predict-demo | predict-resolve | predict-withdraw',
+    'usage: npm run setup -- init | faucet <wallet> [amount] | seed [amount] | set-oracle <address> | predict-price | predict-custom | predict-demo | predict-resolve | predict-withdraw',
   );
   process.exit(1);
 }
@@ -160,6 +164,28 @@ async function seed(amount = '100000') {
   );
   const after = (await loadPerpsState(client.rpc))!;
   console.log(`Deposited ${amount} USDC as liquidity -> pool AUM $${formatUsd(poolAum(after))}`);
+}
+
+async function setOracle(oracle?: string) {
+  if (!oracle) throw new Error('usage: set-oracle <address>');
+  const state = await requireState();
+  for (const m of state.markets) {
+    if (m.data.oracleAuthority === oracle) {
+      console.log(`${m.symbol} already uses ${oracle}`);
+      continue;
+    }
+    await client.sendTransaction([
+      getUpdateMarketInstruction({
+        admin: client.payer,
+        exchange: state.exchangeAddress,
+        market: m.address,
+        oracleAuthority: address(oracle),
+        hourlyBorrowRate: m.data.hourlyBorrowRate,
+        maxOpenInterest: m.data.maxOpenInterest,
+      }),
+    ]);
+    console.log(`${m.symbol}: oracle authority ${m.data.oracleAuthority} -> ${oracle}`);
+  }
 }
 
 async function requireState(): Promise<PerpsState> {
