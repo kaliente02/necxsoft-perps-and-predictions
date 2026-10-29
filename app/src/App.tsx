@@ -13,11 +13,15 @@ import { PriceChart } from './components/PriceChart';
 import { TickerBar } from './components/TickerBar';
 import { useHistory, useNowSecs, useOrders, useOwner, usePerpsState, usePositions, useTokenBalance } from './hooks';
 import { Earn } from './pages/Earn';
+import { Portfolio } from './pages/Portfolio';
 import { Predict } from './pages/Predict';
 
 function pageFromHash(): Page {
   const hash = window.location.hash;
-  return hash.startsWith('#/earn') ? 'earn' : hash.startsWith('#/predict') ? 'predict' : 'trade';
+  if (hash.startsWith('#/earn')) return 'earn';
+  if (hash.startsWith('#/predict')) return 'predict';
+  if (hash.startsWith('#/portfolio')) return 'portfolio';
+  return 'trade';
 }
 
 function usePage(): Page {
@@ -79,6 +83,10 @@ npm run keeper`}</pre>
     );
   } else if (page === 'predict') {
     content = <Predict state={state} owner={owner} usdcBalance={usdcBalance} now={now} />;
+  } else if (page === 'portfolio') {
+    content = (
+      <Portfolio state={state} owner={owner} positions={positions} orders={orders} usdcBalance={usdcBalance} lpSupply={lpSupply} now={now} />
+    );
   } else if (page === 'earn') {
     content = <Earn state={state} owner={owner} usdcBalance={usdcBalance} lpSupply={lpSupply} />;
   } else {

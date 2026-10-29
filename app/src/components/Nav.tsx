@@ -11,7 +11,7 @@ import { type AppClient, FAUCET_URL, NETWORK_LABEL, explorerTxUrl } from '../cli
 import { useTx } from '../tx';
 import { formatUsd } from '../lib/perps';
 
-export type Page = 'trade' | 'predict' | 'earn';
+export type Page = 'trade' | 'predict' | 'earn' | 'portfolio';
 
 function shorten(address: string) {
   return `${address.slice(0, 4)}…${address.slice(-4)}`;
@@ -178,9 +178,9 @@ export function Nav({
           </span>
         </a>
         <nav className="nav-links" aria-label="Primary">
-          {(['trade', 'predict', 'earn'] as const).map((p) => (
+          {(['trade', 'predict', 'earn', 'portfolio'] as const).map((p) => (
             <a key={p} href={`#/${p}`} className={page === p ? 'active' : ''} aria-current={page === p ? 'page' : undefined}>
-              {p === 'trade' ? 'Trade' : p === 'predict' ? 'Predict' : 'Earn'}
+              {p[0].toUpperCase() + p.slice(1)}
             </a>
           ))}
         </nav>

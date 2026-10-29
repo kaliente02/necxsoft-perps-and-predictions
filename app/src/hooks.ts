@@ -5,6 +5,7 @@ import { useClient } from '@solana/react';
 import { useConnectedWallet } from '@solana/kit-plugin-wallet/react';
 import type { AppClient } from './client';
 import { type PerpsState, loadHistory, loadMarketTrades, loadOrders, loadPerpsState, loadPositions, tokenBalance } from './lib/perps';
+import { loadFlows } from './lib/portfolio';
 import { loadPredictionPositions, loadPredictions, loadProbabilityHistory } from './lib/predict';
 
 const REFRESH_MS = 3_000;
@@ -37,6 +38,12 @@ export function useOrders(owner: Address | null) {
 export function useHistory(owner: Address | null) {
   const { rpc } = useClient<AppClient>();
   return useSWR(owner ? ['history', owner] : null, () => loadHistory(rpc, owner!), { refreshInterval: 15_000 });
+}
+
+/** USDC paid and received per product, for the portfolio's profit and loss. */
+export function useFlows(owner: Address | null, mint: Address | undefined) {
+  const { rpc } = useClient<AppClient>();
+  return useSWR(owner && mint ? ['flows', owner, mint] : null, () => loadFlows(rpc, owner!, mint!), { refreshInterval: 15_000 });
 }
 
 export function useTokenBalance(owner: Address | null, mint: Address | undefined) {
