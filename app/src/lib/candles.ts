@@ -19,13 +19,15 @@ const RANGES: Record<Range, { granularity: number; seconds: number }> = {
 
 export const RANGE_OPTIONS = Object.keys(RANGES) as Range[];
 
+/** Granularities Coinbase accepts, finest first. */
+const GRANULARITIES = [60, 300, 900, 3_600, 21_600, 86_400];
+const MAX_CANDLES = 300;
+
 /** Close prices from Coinbase's public candles API — the same reference source the keeper pushes on-chain. */
-async function fetchCandles(symbol: string, range: Range): Promise<Point[]> {
+async function fetchCandles(symbol: string, granularity: number, start: number, end: number): Promise<Point[]> {
   const product = PRODUCTS[symbol];
   if (!product) return [];
-  const { granularity, seconds } = RANGES[range];
-  const end = Math.floor(Date.now() / 1000);
-  const url = `https://api.exchange.coinbase.com/products/${product}/candles?granularity=${granularity}&start=${end - seconds}&end=${end}`;
+  const url = `https://api.exchange.coinbase.com/products/${product}/candles?granularity=${granularity}&start=${start}&end=${end}`;
   const response = await fetch(url);
   if (!response.ok) throw new Error(`candles ${response.status}`);
   // [time, low, high, open, close, volume], newest first
@@ -34,10 +36,34 @@ async function fetchCandles(symbol: string, range: Range): Promise<Point[]> {
 }
 
 export function useCandles(symbol: string, range: Range) {
-  return useSWR(['candles', symbol, range], () => fetchCandles(symbol, range), {
-    refreshInterval: 60_000,
-    keepPreviousData: true,
-  });
+  return useSWR(
+    ['candles', symbol, range],
+    () => {
+      const { granularity, seconds } = RANGES[range];
+      const end = Math.floor(Date.now() / 1000);
+      return fetchCandles(symbol, granularity, end - seconds, end);
+    },
+    { refreshInterval: 60_000, keepPreviousData: true },
+  );
+}
+
+export type DetailCandles = { start: number; end: number; points: Point[] };
+
+/**
+ * Finer candles for a zoomed-in window: picks the finest granularity that covers the window in
+ * one request, and skips the fetch when that isn't finer than the range's own candles.
+ */
+export function useDetailCandles(symbol: string, range: Range, window: { start: number; end: number } | null) {
+  const granularity = window ? GRANULARITIES.find((g) => (window.end - window.start) / g <= MAX_CANDLES) : undefined;
+  const useful = window && granularity && granularity < RANGES[range].granularity;
+  // Snap to the granularity so small pans reuse the cached request.
+  const start = useful ? Math.floor(window.start / granularity) * granularity : 0;
+  const end = useful ? Math.ceil(window.end / granularity) * granularity : 0;
+  return useSWR<DetailCandles>(useful ? ['detail', symbol, granularity, start, end] : null, async () => ({
+    start,
+    end,
+    points: await fetchCandles(symbol, granularity!, start, end),
+  }));
 }
 
 export type DayStats = { open: number; high: number; low: number };

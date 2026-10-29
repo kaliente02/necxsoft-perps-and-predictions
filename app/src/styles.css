@@ -284,7 +284,16 @@ button { font: inherit; color: inherit; }
 .segmented.full button { flex: 1; padding: 9px; font-size: 13px; }
 
 .chart { position: relative; width: 100%; }
-.chart-svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart-svg { display: block; width: 100%; height: auto; overflow: visible; cursor: zoom-in; }
+.chart-card.expanded .chart-svg:not(.zoomed) { cursor: crosshair; }
+.chart-svg.zoomed { cursor: grab; touch-action: pan-y; }
+.chart-card.expanded {
+  width: 100%; max-width: min(1240px, calc((100vh - 150px) * 2.53));
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6); animation: pop 0.25s var(--ease);
+}
+.chart-svg.zoomed:active { cursor: grabbing; }
+.chart-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.segmented button:disabled { opacity: 0.4; cursor: default; }
 .chart-grid line { stroke: rgba(143, 169, 159, 0.08); }
 .chart-axis { fill: var(--text-faintest); font: 11px var(--font-mono); }
 .chart-last { stroke: var(--chart-line); stroke-dasharray: 3 4; opacity: 0.6; }
