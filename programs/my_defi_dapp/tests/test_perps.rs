@@ -8,7 +8,10 @@ use {
     litesvm::LiteSVM,
     my_defi_dapp::{
         constants::*,
-        state::{Exchange, Market, OrderKind, Outcome, Position, PredictionMarket, PredictionPosition, RiskParams, Side},
+        state::{
+            Exchange, LiquidationFeed, Market, MarketHistory, OrderKind, Outcome, Position, PredictionMarket,
+            PredictionPosition, RiskParams, Side,
+        },
     },
     solana_account::Account,
     solana_keypair::Keypair,
@@ -41,6 +44,8 @@ struct Env {
     vault: Pubkey,
     lp_mint: Pubkey,
     market: Pubkey,
+    history: Pubkey,
+    liquidation_feed: Pubkey,
 }
 
 impl Env {
@@ -73,6 +78,8 @@ impl Env {
         let vault = Pubkey::find_program_address(&[VAULT_SEED, exchange.as_ref()], &pid).0;
         let lp_mint = Pubkey::find_program_address(&[LP_MINT_SEED, exchange.as_ref()], &pid).0;
         let market = Pubkey::find_program_address(&[MARKET_SEED, exchange.as_ref(), &[0]], &pid).0;
+        let history = Pubkey::find_program_address(&[HISTORY_SEED, market.as_ref()], &pid).0;
+        let liquidation_feed = Pubkey::find_program_address(&[LIQUIDATION_FEED_SEED], &pid).0;
 
         let mut env = Env {
             svm,
@@ -82,6 +89,8 @@ impl Env {
             vault,
             lp_mint,
             market,
+            history,
+            liquidation_feed,
         };
 
         env.send(
@@ -121,7 +130,32 @@ impl Env {
             &[&env.admin.insecure_clone()],
         )
         .unwrap();
+        // No funding by default, so the fee arithmetic in most tests is borrow fees only.
+        env.configure_market(0).unwrap();
         env
+    }
+
+    fn configure_market(&mut self, max_hourly_funding_rate: u64) -> Result<(), String> {
+        let admin = self.admin.insecure_clone();
+        self.send(
+            ix(
+                my_defi_dapp::instruction::ConfigureMarket { max_hourly_funding_rate },
+                my_defi_dapp::accounts::ConfigureMarket {
+                    admin: admin.pubkey(),
+                    exchange: self.exchange,
+                    market: self.market,
+                    history: self.history,
+                    liquidation_feed: self.liquidation_feed,
+                    system_program: system_program::ID,
+                },
+            ),
+            &[&admin],
+        )
+    }
+
+    fn load_zero_copy<T: bytemuck::Pod>(&self, address: Pubkey) -> T {
+        let data = self.svm.get_account(&address).unwrap().data;
+        *bytemuck::from_bytes(&data[8..8 + std::mem::size_of::<T>()])
     }
 
     fn send(&mut self, instruction: Instruction, signers: &[&Keypair]) -> Result<(), String> {
@@ -206,6 +240,7 @@ impl Env {
                 my_defi_dapp::accounts::UpdatePrice {
                     oracle_authority: admin.pubkey(),
                     market: self.market,
+                    history: Some(self.history),
                 },
             ),
             &[&admin],
@@ -320,6 +355,7 @@ impl Env {
                 owner_collateral: owner_usdc,
                 liquidator_collateral: liquidator_usdc,
                 vault: self.vault,
+                liquidation_feed: self.liquidation_feed,
                 token_program: spl_token::ID,
             },
         );
@@ -558,6 +594,18 @@ fn short_is_liquidated_after_adverse_move() {
     assert_eq!(env.balance(keeper_usdc), 50 * USD);
     assert_eq!(env.balance(trader_usdc), 30 * USD);
     assert_eq!(env.market().short_open_interest, 0);
+
+    // The liquidation is in the public feed.
+    let feed: LiquidationFeed = env.load_zero_copy(env.liquidation_feed);
+    assert_eq!((feed.count, feed.head), (1, 1));
+    let record = feed.records[0];
+    assert_eq!(record.owner, trader.pubkey());
+    assert_eq!(record.market, env.market);
+    assert_eq!(record.side, Side::Short as u8);
+    assert_eq!(record.price, 104 * USD);
+    assert_eq!(record.size_usd, 10_000 * USD);
+    assert_eq!(record.collateral, 490 * USD);
+    assert_eq!(record.liquidator_reward, 50 * USD);
 }
 
 #[test]
@@ -628,6 +676,7 @@ fn risk_checks_reject_bad_trades() {
                 my_defi_dapp::accounts::UpdatePrice {
                     oracle_authority: trader.pubkey(),
                     market: env.market,
+                    history: None,
                 },
             ),
             &[&trader],
@@ -794,11 +843,27 @@ impl Env {
         initial_yes_bps: u16,
         fee_bps: u16,
     ) -> Prediction {
+        let admin = self.admin.insecure_clone();
+        self.create_prediction_as(&admin, id, oracle, strike, close_time, liquidity, initial_yes_bps, fee_bps)
+            .unwrap()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_prediction_as(
+        &mut self,
+        creator: &Keypair,
+        id: u64,
+        oracle: bool,
+        strike: u64,
+        close_time: i64,
+        liquidity: u64,
+        initial_yes_bps: u16,
+        fee_bps: u16,
+    ) -> Result<Prediction, String> {
         let pid = my_defi_dapp::id();
         let market = Pubkey::find_program_address(&[PREDICTION_SEED, &id.to_le_bytes()], &pid).0;
         let vault = Pubkey::find_program_address(&[PREDICTION_VAULT_SEED, market.as_ref()], &pid).0;
-        let admin = self.admin.insecure_clone();
-        let admin_usdc = self.token_account(self.usdc, admin.pubkey(), liquidity);
+        let creator_usdc = self.token_account(self.usdc, creator.pubkey(), liquidity);
         self.send(
             ix(
                 my_defi_dapp::instruction::CreatePrediction {
@@ -811,21 +876,20 @@ impl Env {
                     fee_bps,
                 },
                 my_defi_dapp::accounts::CreatePrediction {
-                    admin: admin.pubkey(),
+                    creator: creator.pubkey(),
                     exchange: self.exchange,
                     oracle_market: oracle.then_some(self.market),
                     prediction: market,
                     collateral_mint: self.usdc,
                     vault,
-                    admin_collateral: admin_usdc,
+                    creator_collateral: creator_usdc,
                     token_program: spl_token::ID,
                     system_program: system_program::ID,
                 },
             ),
-            &[&admin],
-        )
-        .unwrap();
-        Prediction { market, vault }
+            &[creator],
+        )?;
+        Ok(Prediction { market, vault })
     }
 
     fn prediction_position(&self, p: &Prediction, owner: Pubkey) -> Pubkey {
@@ -1067,4 +1131,171 @@ fn invalid_prediction_refunds_half_per_share() {
     env.withdraw_prediction_liquidity(&p, admin_usdc).unwrap();
     // Halving rounds down, so at most a few base units can be left behind.
     assert!(env.balance(p.vault) <= 2);
+}
+
+// ---------------------------------------------------------------- funding, stop entries, keeper markets
+
+#[test]
+fn funding_is_paid_by_the_heavier_side() {
+    let mut env = Env::new();
+    let (lp, lp_usdc, lp_lp) = env.user(100_000 * USD);
+    env.add_liquidity(&lp, lp_usdc, lp_lp, 100_000 * USD).unwrap();
+    // 0.1% per hour at full skew.
+    env.configure_market(1_000_000).unwrap();
+    let err = env.configure_market(MAX_HOURLY_FUNDING_RATE + 1).unwrap_err();
+    assert!(err.contains("InvalidRiskParams"), "{err}");
+
+    let (long, long_usdc, _) = env.user(1_000 * USD);
+    let (short, short_usdc, _) = env.user(500 * USD);
+    env.increase(&long, long_usdc, Side::Long, 1_000 * USD, 10_000 * USD, u64::MAX).unwrap();
+    assert_eq!(env.market().funding_rate, 1_000_000); // all long
+    env.increase(&short, short_usdc, Side::Short, 500 * USD, 5_000 * USD, 0).unwrap();
+    // skew = (10k - 5k) / 15k = 1/3
+    assert_eq!(env.market().funding_rate, 333_333);
+
+    env.advance(3_600);
+    env.set_price(SOL_PRICE);
+    let market = env.market();
+    assert_eq!(market.cumulative_funding_index, 333_333);
+    assert_eq!(market.long_fee_index, 100_000 + 333_333);
+    assert_eq!(market.short_fee_index, 100_000 - 333_333);
+
+    // Long pays $1 borrow + $3.33 funding on $10k; short pays $0.50 borrow and receives $1.67.
+    env.close(&long, long_usdc, Side::Long, 0).unwrap();
+    assert_eq!(env.balance(long_usdc), 990 * USD - 4_333_330 - 10 * USD);
+    env.close(&short, short_usdc, Side::Short, u64::MAX).unwrap();
+    assert_eq!(env.balance(short_usdc), 495 * USD + 1_166_665 - 5 * USD);
+    env.assert_solvent();
+    let exchange = env.exchange();
+    assert_eq!(exchange.total_collateral, 0);
+    // The pool keeps fees plus the funding skew: 15 + 15 + 1.5 borrow + (3.33 - 1.67) funding.
+    assert_eq!(exchange.pool_balance, 100_000 * USD + 30 * USD + 4_333_330 - 1_166_665);
+
+    // The hourly history recorded the market at the price update.
+    let history: MarketHistory = env.load_zero_copy(env.history);
+    let sample = history.samples[(history.head as usize + HISTORY_LEN - 1) % HISTORY_LEN];
+    assert_eq!(sample.funding_rate, 333_333);
+    assert_eq!(sample.long_open_interest, 10_000 * USD);
+    assert_eq!(sample.short_open_interest, 5_000 * USD);
+    // A second price in the same hour doesn't add a sample.
+    let count = history.count;
+    env.advance(60);
+    env.set_price(SOL_PRICE);
+    assert_eq!(env.load_zero_copy::<MarketHistory>(env.history).count, count);
+}
+
+#[test]
+fn configure_market_migrates_pre_funding_markets() {
+    let mut env = Env::new();
+    let (lp, lp_usdc, lp_lp) = env.user(100_000 * USD);
+    env.add_liquidity(&lp, lp_usdc, lp_lp, 100_000 * USD).unwrap();
+    let (trader, trader_usdc, _) = env.user(1_000 * USD);
+    env.increase(&trader, trader_usdc, Side::Long, 1_000 * USD, 10_000 * USD, u64::MAX).unwrap();
+
+    // Cut the market back to its pre-funding layout, as on devnet before the upgrade.
+    let mut account = env.svm.get_account(&env.market).unwrap();
+    account.data.truncate(account.data.len() - 64);
+    env.svm.set_account(env.market, account).unwrap();
+    env.advance(3_600);
+    let err = env.close(&trader, trader_usdc, Side::Long, 0).unwrap_err();
+    assert!(err.contains("AccountDidNotDeserialize"), "{err}");
+
+    env.configure_market(1_000_000).unwrap();
+    let market = env.market();
+    assert_eq!(market.cumulative_borrow_index, 100_000);
+    assert_eq!(market.long_fee_index, 100_000);
+    assert_eq!(market.short_fee_index, 100_000);
+    assert_eq!(market.funding_rate, 1_000_000);
+
+    // The open position pays the borrow fee it owed before migration, and no funding for it.
+    env.set_price(SOL_PRICE);
+    env.close(&trader, trader_usdc, Side::Long, 0).unwrap();
+    assert_eq!(env.balance(trader_usdc), 990 * USD - USD - 10 * USD);
+    env.assert_solvent();
+}
+
+#[test]
+fn stop_entry_orders_open_on_a_breakout() {
+    let mut env = Env::new();
+    let (lp, lp_usdc, lp_lp) = env.user(100_000 * USD);
+    env.add_liquidity(&lp, lp_usdc, lp_lp, 100_000 * USD).unwrap();
+    let (trader, trader_usdc, _) = env.user(1_000 * USD);
+    let (keeper, keeper_usdc, _) = env.user(0);
+
+    env.place_order(&trader, trader_usdc, 1, Side::Long, OrderKind::StopEntry, 105 * USD, 5_000 * USD, 500 * USD)
+        .unwrap();
+    assert_eq!(env.balance(trader_usdc), 500 * USD);
+    env.set_price(95 * USD);
+    let err = env.execute_limit(&keeper, trader.pubkey(), 1, Side::Long).unwrap_err();
+    assert!(err.contains("OrderNotTriggered"), "{err}");
+    // It isn't a take-profit / stop-loss either.
+    let err = env
+        .execute_trigger(&keeper, trader.pubkey(), trader_usdc, 1, Side::Long)
+        .unwrap_err();
+    assert!(err.contains("InvalidOrder") || err.contains("AccountNotInitialized"), "{err}");
+
+    env.set_price(106 * USD);
+    env.execute_limit(&keeper, trader.pubkey(), 1, Side::Long).unwrap();
+    env.assert_solvent();
+    let position: Position = env.load(env.position_address(trader.pubkey(), Side::Long));
+    assert_eq!(position.size_usd, 5_000 * USD);
+    assert_eq!(position.entry_price, 106 * USD);
+    assert!(env.is_closed(env.order_address(trader.pubkey(), 1)));
+    let _ = keeper_usdc;
+
+    // A short stop entry sells a breakdown.
+    env.place_order(&trader, trader_usdc, 2, Side::Short, OrderKind::StopEntry, 100 * USD, 1_000 * USD, 100 * USD)
+        .unwrap();
+    let err = env.execute_limit(&keeper, trader.pubkey(), 2, Side::Short).unwrap_err();
+    assert!(err.contains("OrderNotTriggered"), "{err}");
+    env.set_price(99 * USD);
+    env.execute_limit(&keeper, trader.pubkey(), 2, Side::Short).unwrap();
+    env.assert_solvent();
+}
+
+#[test]
+fn oracle_authority_can_open_price_markets_only() {
+    let mut env = Env::new();
+    let keeper = Keypair::new();
+    env.svm.airdrop(&keeper.pubkey(), 1_000_000_000).unwrap();
+    let close = 1_700_000_000 + 3_600;
+
+    // Before it is the oracle authority, the keeper can't open markets.
+    let err = env
+        .create_prediction_as(&keeper, 1, true, SOL_PRICE, close, 1_000 * USD, 5_000, 100)
+        .err()
+        .unwrap();
+    assert!(err.contains("Unauthorized"), "{err}");
+
+    let admin = env.admin.insecure_clone();
+    env.send(
+        ix(
+            my_defi_dapp::instruction::UpdateMarket {
+                oracle_authority: keeper.pubkey(),
+                hourly_borrow_rate: 100_000,
+                max_open_interest: 1_000_000 * USD,
+            },
+            my_defi_dapp::accounts::UpdateMarket {
+                admin: admin.pubkey(),
+                exchange: env.exchange,
+                market: env.market,
+            },
+        ),
+        &[&admin],
+    )
+    .unwrap();
+
+    let p = env
+        .create_prediction_as(&keeper, 2, true, SOL_PRICE, close, 1_000 * USD, 5_000, 100)
+        .unwrap();
+    let market: PredictionMarket = env.load(p.market);
+    assert_eq!(market.creator, keeper.pubkey());
+    assert_eq!(market.oracle_market, env.market);
+
+    // Custom questions stay admin-only.
+    let err = env
+        .create_prediction_as(&keeper, 3, false, 0, close, 1_000 * USD, 5_000, 100)
+        .err()
+        .unwrap();
+    assert!(err.contains("Unauthorized"), "{err}");
 }

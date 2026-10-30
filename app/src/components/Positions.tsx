@@ -11,6 +11,7 @@ import {
   closePositionIxs,
   formatUsd,
   isAttached,
+  opensPosition,
   orderKindLabel,
   priceDecimals,
   signedUsd,
@@ -188,7 +189,7 @@ export function Positions({
       </div>
 
       {body}
-      {tab === 'positions' && <p className="fine left">PnL is shown net of the closing fee and accrued borrow fees.</p>}
+      {tab === 'positions' && <p className="fine left">PnL is shown net of the closing fee, accrued borrow fees and funding.</p>}
 
       {editingPosition && (
         <EditPosition
@@ -227,7 +228,7 @@ export function Positions({
                   <div><dt>Price limit (1%)</dt><dd className="mono">${formatUsd(priceLimit, dp)}</dd></div>
                   <div><dt>Price PnL</dt><dd className={`mono ${v.pnl >= 0n ? 'pos' : 'neg'}`}>{signedUsd(v.pnl)}</dd></div>
                   <div><dt>Close fee</dt><dd className="mono">−${formatUsd(v.closeFee)}</dd></div>
-                  <div><dt>Borrow fee</dt><dd className="mono">−${formatUsd(v.borrowFee)}</dd></div>
+                  <div><dt>Borrow &amp; funding</dt><dd className="mono">{signedUsd(-v.accruedFees)}</dd></div>
                 </dl>
                 {attached > 0 && (
                   <p className="fine">Your {attached === 1 ? 'take-profit / stop-loss order' : `${attached} take-profit / stop-loss orders`} on this position will be cancelled too.</p>
@@ -287,7 +288,7 @@ function OrdersTable({ state, orders, positions }: { state: PerpsState; orders: 
             const isLong = o.side === Side.Long;
             const dp = priceDecimals(market.data.price);
             const orphaned =
-              o.kind !== OrderKind.Limit && !positions.some((p) => p.market.address === o.market && p.data.side === o.side);
+              !opensPosition(o.kind) && !positions.some((p) => p.market.address === o.market && p.data.side === o.side);
             return (
               <tr key={order.address}>
                 <td>

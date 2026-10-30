@@ -60,7 +60,7 @@ pub fn handle_increase_position(
     let position = &mut accounts.position;
     require!(!exchange.paused, ErrorCode::Paused);
 
-    market.accrue_borrow(now)?;
+    market.accrue_fees(now)?;
     let price = market.fresh_price(now, exchange.params.max_price_age_secs)?;
     if position.size_usd == 0 {
         init_position(position, accounts.owner.key(), market, side, now, ctx.bumps.position);
@@ -106,7 +106,7 @@ pub(crate) fn init_position(
         collateral: 0,
         base: 0,
         entry_price: 0,
-        entry_borrow_index: market.cumulative_borrow_index,
+        entry_borrow_index: market.fee_index(side),
         opened_at: now,
         last_updated: now,
         bump,
@@ -114,7 +114,8 @@ pub(crate) fn init_position(
 }
 
 /// Add `collateral_in` (already in, or about to enter, the vault) and `size_delta_usd` to a
-/// position, settling borrow fees and charging the open fee. Returns the fees charged.
+/// position, settling borrow fees and funding and charging the open fee. Returns the fees
+/// charged, net of any funding received (0 if funding received exceeds the fees).
 pub(crate) fn apply_increase(
     exchange: &mut Exchange,
     market: &mut Market,
@@ -134,18 +135,11 @@ pub(crate) fn apply_increase(
         );
     }
 
-    // Settle borrow fees accrued so far, then charge the opening fee on the added size.
-    let borrow_fee = position.borrow_fee(market);
-    let trade_fee = bps_of(size_delta_usd, params.trade_fee_bps);
-    let fees = borrow_fee
-        .checked_add(trade_fee)
-        .ok_or(ErrorCode::MathOverflow)?;
-    let collateral = position
-        .collateral
-        .checked_add(collateral_in)
-        .ok_or(ErrorCode::MathOverflow)?
-        .checked_sub(fees)
-        .ok_or(ErrorCode::InsufficientMargin)?;
+    // Settle borrow fees and funding accrued so far, then charge the opening fee on the added size.
+    let fees = position.accrued_fees(market) + bps_of(size_delta_usd, params.trade_fee_bps) as i128;
+    let collateral = position.collateral as i128 + collateral_in as i128 - fees;
+    require!(collateral >= 0, ErrorCode::InsufficientMargin);
+    let collateral = u64::try_from(collateral).map_err(|_| ErrorCode::MathOverflow)?;
     require!(
         collateral >= params.min_collateral,
         ErrorCode::CollateralTooSmall
@@ -163,7 +157,7 @@ pub(crate) fn apply_increase(
         .ok_or(ErrorCode::MathOverflow)?;
     require!(position.base > 0, ErrorCode::ZeroAmount);
     position.entry_price = mul_div(position.size_usd as u128, BASE_SCALE, position.base) as u64;
-    position.entry_borrow_index = market.cumulative_borrow_index;
+    position.entry_borrow_index = market.fee_index(position.side);
     position.last_updated = now;
     check_position_risk(position, market, price, &params)?;
 
@@ -176,17 +170,13 @@ pub(crate) fn apply_increase(
         exchange.total_open_interest <= exchange.max_open_interest(),
         ErrorCode::PoolUtilizationCap
     );
-    exchange.pool_balance = exchange
-        .pool_balance
-        .checked_add(fees)
-        .ok_or(ErrorCode::MathOverflow)?;
-    // Fees move from trader collateral to the pool.
-    exchange.total_collateral = exchange
-        .total_collateral
-        .checked_add(collateral_in)
-        .and_then(|c| c.checked_sub(fees))
-        .ok_or(ErrorCode::MathOverflow)?;
-    Ok(fees)
+    // Fees move from trader collateral to the pool (and funding received the other way).
+    let pool = exchange.pool_balance as i128 + fees;
+    require!(pool >= 0, ErrorCode::InsufficientPoolLiquidity);
+    exchange.pool_balance = pool as u64;
+    let total_collateral = exchange.total_collateral as i128 + collateral_in as i128 - fees;
+    exchange.total_collateral = u64::try_from(total_collateral).map_err(|_| ErrorCode::MathOverflow)?;
+    Ok(fees.max(0) as u64)
 }
 
 fn check_position_risk(position: &Position, market: &Market, price: u64, params: &RiskParams) -> Result<()> {
@@ -242,7 +232,7 @@ pub fn handle_decrease_position(
     let market = &mut accounts.market;
     let position = &mut accounts.position;
 
-    market.accrue_borrow(now)?;
+    market.accrue_fees(now)?;
     let price = market.fresh_price(now, exchange.params.max_price_age_secs)?;
     if size_delta_usd > 0 {
         check_price_limit(position.side, false, price, price_limit)?;
@@ -272,12 +262,13 @@ pub fn handle_decrease_position(
 
 pub(crate) struct Decrease {
     pub pnl: i128,
+    /// Fees charged net of funding received (0 if funding received exceeds the fees).
     pub fees: u64,
     pub payout: u64,
 }
 
 /// Remove `size_delta_usd` of size (strictly less than the whole position) and `collateral_out`
-/// of collateral, settling borrow fees and the close fee on the removed size.
+/// of collateral, settling borrow fees, funding and the close fee on the removed size.
 pub(crate) fn apply_decrease(
     exchange: &mut Exchange,
     market: &mut Market,
@@ -297,10 +288,7 @@ pub(crate) fn apply_decrease(
         ErrorCode::UseClosePosition
     );
 
-    let fees = position
-        .borrow_fee(market)
-        .checked_add(bps_of(size_delta_usd, params.trade_fee_bps))
-        .ok_or(ErrorCode::MathOverflow)?;
+    let fees = position.accrued_fees(market) + bps_of(size_delta_usd, params.trade_fee_bps) as i128;
     // The closed slice keeps the position's entry price, so it takes a proportional share of base.
     let base_delta = mul_div(position.base, size_delta_usd as u128, position.size_usd as u128);
     let value = mul_div(base_delta, price as u128, BASE_SCALE) as i128;
@@ -308,7 +296,7 @@ pub(crate) fn apply_decrease(
         Side::Long => value - size_delta_usd as i128,
         Side::Short => size_delta_usd as i128 - value,
     };
-    let realized = pnl - fees as i128;
+    let realized = pnl - fees;
 
     let collateral = position.collateral as i128 - collateral_out as i128 + realized.min(0);
     require!(collateral >= 0, ErrorCode::InsufficientMargin);
@@ -335,7 +323,7 @@ pub(crate) fn apply_decrease(
     position.collateral = collateral;
     position.size_usd -= size_delta_usd;
     position.base -= base_delta;
-    position.entry_borrow_index = market.cumulative_borrow_index;
+    position.entry_borrow_index = market.fee_index(position.side);
     position.last_updated = now;
     require!(
         collateral >= params.min_collateral,
@@ -343,7 +331,11 @@ pub(crate) fn apply_decrease(
     );
     check_position_risk(position, market, price, &params)?;
 
-    Ok(Decrease { pnl, fees, payout })
+    Ok(Decrease {
+        pnl,
+        fees: fees.max(0) as u64,
+        payout,
+    })
 }
 
 #[derive(Accounts)]
@@ -382,7 +374,7 @@ pub fn handle_close_position(ctx: Context<ClosePosition>, price_limit: u64) -> R
     let market = &mut accounts.market;
     let position = &accounts.position;
 
-    market.accrue_borrow(now)?;
+    market.accrue_fees(now)?;
     let price = market.fresh_price(now, exchange.params.max_price_age_secs)?;
     check_price_limit(position.side, false, price, price_limit)?;
 

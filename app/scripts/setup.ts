@@ -4,6 +4,8 @@
 //   npm run setup -- faucet <wallet> [n]  mint n (default 10,000) mock USDC to a wallet
 //   npm run setup -- seed [n]             mint n (default 100,000) mock USDC to the admin and deposit it as pool liquidity
 //   npm run setup -- set-oracle <address> make <address> every market's oracle authority (keeps borrow rate and OI cap)
+//   npm run setup -- configure            set every market's funding rate; also migrates markets created before
+//                                         funding and creates their hourly history and the liquidation feed
 //
 // Prediction markets (liquidity in USDC, minted to the admin as needed):
 //   npm run setup -- predict-price <SYMBOL> <strike> <hours> [liquidity]
@@ -20,6 +22,7 @@ import {
   findLpMintPda,
   findInitializeVaultPda,
   getAddMarketInstruction,
+  getConfigureMarketInstructionAsync,
   getInitializeInstruction,
   getUpdateMarketInstruction,
 } from '../src/generated';
@@ -36,10 +39,11 @@ import {
 import { RPC_URL, createScriptClient, fetchPrices } from './common';
 
 const MARKETS = [
-  // symbol, fallback price, hourly borrow rate (1e9 = 100%/h; 100_000 = 0.01%/h), per-side OI cap
-  { symbol: 'SOL-PERP', fallbackPrice: 150n * USD, hourlyBorrowRate: 100_000n, maxOpenInterest: 5_000_000n * USD },
-  { symbol: 'BTC-PERP', fallbackPrice: 100_000n * USD, hourlyBorrowRate: 80_000n, maxOpenInterest: 5_000_000n * USD },
-  { symbol: 'ETH-PERP', fallbackPrice: 3_500n * USD, hourlyBorrowRate: 80_000n, maxOpenInterest: 5_000_000n * USD },
+  // symbol, fallback price, hourly borrow rate (1e9 = 100%/h; 100_000 = 0.01%/h), per-side OI cap,
+  // hourly funding rate when all open interest is on one side (same scale)
+  { symbol: 'SOL-PERP', fallbackPrice: 150n * USD, hourlyBorrowRate: 100_000n, maxOpenInterest: 5_000_000n * USD, maxFunding: 200_000n },
+  { symbol: 'BTC-PERP', fallbackPrice: 100_000n * USD, hourlyBorrowRate: 80_000n, maxOpenInterest: 5_000_000n * USD, maxFunding: 150_000n },
+  { symbol: 'ETH-PERP', fallbackPrice: 3_500n * USD, hourlyBorrowRate: 80_000n, maxOpenInterest: 5_000_000n * USD, maxFunding: 150_000n },
 ];
 
 const client = await createScriptClient();
@@ -54,6 +58,8 @@ if (command === 'init') {
   await seed(args[0]);
 } else if (command === 'set-oracle') {
   await setOracle(args[0]);
+} else if (command === 'configure') {
+  await configure();
 } else if (command === 'predict-price') {
   await predictPrice(args[0], args[1], args[2], args[3]);
 } else if (command === 'predict-custom') {
@@ -136,7 +142,29 @@ async function init() {
       }),
     ]);
   }
+  await configure();
   console.log('Done. Run `npm run keeper` to stream prices and liquidate unhealthy positions.');
+}
+
+async function configure() {
+  // Read raw accounts: markets created before funding don't decode with the current client.
+  const [exchange] = await findExchangePda();
+  const { value: exchangeAccount } = await client.rpc.getAccountInfo(exchange, { encoding: 'base64' }).send();
+  if (!exchangeAccount) throw new Error('Exchange not initialized; run `npm run setup -- init` first');
+  // num_markets: after the discriminator, 4 pubkeys and 3 u64s.
+  const numMarkets = Buffer.from(exchangeAccount.data[0], 'base64')[8 + 32 * 4 + 8 * 3];
+  for (let index = 0; index < numMarkets; index++) {
+    const market = await marketPda(exchange, index);
+    const { value } = await client.rpc.getAccountInfo(market, { encoding: 'base64' }).send();
+    const data = Buffer.from(value!.data[0], 'base64');
+    // symbol: after the discriminator, exchange pubkey and index byte.
+    const symbol = data.subarray(41, 57).toString('utf8').replace(/\0+$/, '');
+    const maxFunding = MARKETS.find((m) => m.symbol === symbol)?.maxFunding ?? 150_000n;
+    await client.sendTransaction([
+      await getConfigureMarketInstructionAsync({ admin: client.payer, exchange, market, maxHourlyFundingRate: maxFunding }),
+    ]);
+    console.log(`${symbol}: funding up to ${(Number(maxFunding) / 1e7).toFixed(4)}% / h (${data.length} byte account)`);
+  }
 }
 
 async function faucet(wallet: string | undefined, amount = '10000') {
@@ -219,7 +247,7 @@ async function createPrediction(args: {
   await client.sendTransaction([
     await createPredictionIx({
       state,
-      admin: client.payer,
+      creator: client.payer,
       id,
       question,
       oracleMarket: market?.address,

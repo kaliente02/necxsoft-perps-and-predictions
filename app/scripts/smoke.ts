@@ -164,11 +164,11 @@ const customId = newId();
 const priceId = newId();
 await client.sendTransaction([
   await createPredictionIx({
-    state, admin: owner, id: customId, question: 'Smoke test: will this pass?', strike: 0n,
+    state, creator: owner, id: customId, question: 'Smoke test: will this pass?', strike: 0n,
     closeTime: nowSecs + 3_600n, liquidity: 1_000n * USD, initialYesBps: 6_000, feeBps: 100,
   }),
   await createPredictionIx({
-    state, admin: owner, id: priceId, question: 'Smoke test: SOL above zero?', oracleMarket: market.address,
+    state, creator: owner, id: priceId, question: 'Smoke test: SOL above zero?', oracleMarket: market.address,
     strike: 1n, closeTime: nowSecs + 20n, liquidity: 500n * USD, initialYesBps: 5_000, feeBps: 0,
   }),
 ]);

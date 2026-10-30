@@ -7,12 +7,16 @@ import {
   type PerpsState,
   type PositionInfo,
   Side,
+  formatHourlyRate,
   formatUsd,
+  fundingText,
   increasePositionIxs,
   liquidationPrice,
+  orderKindLabel,
   parseUsd,
   placeOrderIx,
   priceDecimals,
+  sideFundingRate,
   signedUsd,
   triggerProblem,
 } from '../lib/perps';
@@ -23,7 +27,7 @@ import { assetOf } from './TickerBar';
 const SLIPPAGES = [10n, 50n, 100n]; // bps
 const PRESETS = [2, 5, 10, 25, 50];
 
-type OrderType = 'market' | 'limit';
+type OrderType = 'market' | 'limit' | 'stop';
 
 /** Price input for limit and TP/SL triggers, in USD. */
 function PriceField({
@@ -80,15 +84,19 @@ export function OrderPanel({
   const price = market.data.price;
   const dp = priceDecimals(price);
   const isLong = side === Side.Long;
-  const isLimit = orderType === 'limit';
+  // Limit and stop orders rest on-chain until the keeper fills them.
+  const isLimit = orderType !== 'market';
+  const isStop = orderType === 'stop';
+  const entryKind = isStop ? OrderKind.StopEntry : OrderKind.Limit;
 
-  // Start trigger inputs at sensible levels whenever the market or side changes.
+  // Start trigger inputs at sensible levels whenever the market, side or order type changes:
+  // a limit buys a 1% dip (or sells a 1% rise), a stop buys a 1% breakout (or sells a 1% breakdown).
   useEffect(() => {
     const pct = (bps: bigint) => formatUsd((price * bps) / BPS, dp).replace(/,/g, '');
-    setLimitInput(pct(isLong ? 9_900n : 10_100n));
+    setLimitInput(pct(isLong !== isStop ? 9_900n : 10_100n));
     setTpInput('');
     setSlInput('');
-  }, [market.address, side]);
+  }, [market.address, side, isStop]);
 
   const limitPrice = parseUsd(limitInput) ?? 0n;
   const entryPrice = isLimit ? limitPrice : price;
@@ -118,7 +126,7 @@ export function OrderPanel({
   else if (usdcBalance !== undefined && collateral > usdcBalance) problem = 'Insufficient USDC balance';
   else if (!existing && collateral - openFee < params.minCollateral)
     problem = `Minimum collateral is ${formatUsd(params.minCollateral, 0)} USDC`;
-  else if (isLimit) problem = triggerProblem(OrderKind.Limit, side, limitPrice, price);
+  else if (isLimit) problem = triggerProblem(entryKind, side, limitPrice, price);
   else if (sideOi + size > market.data.maxOpenInterest) problem = 'Market open-interest cap reached';
   else if (size > available) problem = 'Exceeds available liquidity';
   if (!problem && tpPrice) problem = triggerProblem(OrderKind.TakeProfit, side, tpPrice, price);
@@ -127,7 +135,7 @@ export function OrderPanel({
     problem = 'Stop loss is past the liquidation price';
 
   const asset = assetOf(market.symbol);
-  const action = `${isLimit ? 'Limit ' : ''}${isLong ? 'Long' : 'Short'} ${asset}`;
+  const action = `${isLimit ? `${orderKindLabel(entryKind)} ` : ''}${isLong ? 'Long' : 'Short'} ${asset}`;
   const presets = PRESETS.filter((v) => v <= params.maxLeverage);
 
   function submit() {
@@ -139,7 +147,7 @@ export function OrderPanel({
           owner,
           market: market.address,
           side,
-          kind: OrderKind.Limit,
+          kind: entryKind,
           triggerPrice: limitPrice,
           sizeUsd: size,
           collateral,
@@ -167,13 +175,14 @@ export function OrderPanel({
 
   const details = (
     <dl className="kv">
-      <div><dt>{isLimit ? 'Limit price' : 'Entry price'}</dt><dd className="mono">{entryPrice > 0n ? `$${formatUsd(entryPrice, dp)}` : '—'}</dd></div>
+      <div><dt>{isLimit ? `${orderKindLabel(entryKind)} price` : 'Entry price'}</dt><dd className="mono">{entryPrice > 0n ? `$${formatUsd(entryPrice, dp)}` : '—'}</dd></div>
       {!isLimit && <div><dt>Price limit ({Number(slippageBps) / 100}%)</dt><dd className="mono">${formatUsd(priceLimit, dp)}</dd></div>}
       <div><dt>Est. liquidation price</dt><dd className="mono warn">{liqPrice > 0n ? `$${formatUsd(liqPrice, dp)}` : '—'}</dd></div>
       {tpPrice ? <div><dt>Take profit</dt><dd className="mono pos">${formatUsd(tpPrice, dp)} · {signedUsd(pnlAtTrigger(tpPrice))}</dd></div> : null}
       {slPrice ? <div><dt>Stop loss</dt><dd className="mono neg">${formatUsd(slPrice, dp)} · {signedUsd(pnlAtTrigger(slPrice))}</dd></div> : null}
       <div><dt>Open fee ({params.tradeFeeBps / 100}%)</dt><dd className="mono">${formatUsd(openFee)}</dd></div>
-      <div><dt>Borrow fee</dt><dd className="mono">{(Number(market.data.hourlyBorrowRate) / 1e7).toFixed(4)}% / h</dd></div>
+      <div><dt>Borrow fee</dt><dd className="mono">{formatHourlyRate(market.data.hourlyBorrowRate)} / h</dd></div>
+      <div><dt>Funding ({isLong ? 'long' : 'short'})</dt><dd className={`mono ${sideFundingRate(market.data, side) > 0n ? 'neg' : sideFundingRate(market.data, side) < 0n ? 'pos' : ''}`}>{fundingText(sideFundingRate(market.data, side))}</dd></div>
     </dl>
   );
 
@@ -191,22 +200,24 @@ export function OrderPanel({
 
       <div className="order-type">
         <div className="segmented small" role="tablist" aria-label="Order type">
-          {(['market', 'limit'] as const).map((t) => (
+          {(['market', 'limit', 'stop'] as const).map((t) => (
             <button key={t} role="tab" aria-selected={orderType === t} className={orderType === t ? 'active' : ''} onClick={() => setOrderType(t)}>
-              {t === 'market' ? 'Market' : 'Limit'}
+              {t === 'market' ? 'Market' : t === 'limit' ? 'Limit' : 'Stop'}
             </button>
           ))}
         </div>
         <span className="faint">
-          {isLimit
-            ? `Opens when the price ${isLong ? 'falls to' : 'rises to'} your limit`
-            : 'Executes now at the oracle price'}
+          {isStop
+            ? `Opens when the price breaks ${isLong ? 'above' : 'below'} your stop`
+            : isLimit
+              ? `Opens when the price ${isLong ? 'falls to' : 'rises to'} your limit`
+              : 'Executes now at the oracle price'}
         </span>
       </div>
 
       {isLimit && (
         <PriceField
-          label="Limit price"
+          label={isStop ? 'Stop price' : 'Limit price'}
           value={limitInput}
           onChange={setLimitInput}
           hint={`Mark $${formatUsd(price, dp)}`}
@@ -302,7 +313,7 @@ export function OrderPanel({
       </button>
 
       {reviewing && (
-        <Modal title={isLimit ? 'Review limit order' : 'Review order'} onClose={() => setReviewing(false)}>
+        <Modal title={isLimit ? `Review ${isStop ? 'stop' : 'limit'} order` : 'Review order'} onClose={() => setReviewing(false)}>
           <div className="review-hero">
             <span className={`badge ${isLong ? 'long' : 'short'}`}>{isLong ? 'Long' : 'Short'}</span>
             <span className="review-size mono">${formatUsd(size)}</span>
@@ -311,7 +322,7 @@ export function OrderPanel({
           {details}
           <p className="fine">
             {isLimit
-              ? `The keeper opens this position at the oracle price once ${asset} trades at or ${isLong ? 'below' : 'above'} $${formatUsd(limitPrice, dp)}. Pool liquidity and risk limits are checked when it fills.`
+              ? `The keeper opens this position at the oracle price once ${asset} trades at or ${isLong !== isStop ? 'below' : 'above'} $${formatUsd(limitPrice, dp)}. Pool liquidity and risk limits are checked when it fills.`
               : "You'll be asked to approve this transaction in your wallet. If the oracle price moves beyond your price limit before execution, the order is rejected and nothing is charged."}
           </p>
           <div className="modal-actions">

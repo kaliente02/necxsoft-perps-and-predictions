@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Address } from '@solana/kit';
 import { type MarketInfo, OrderKind, Side, USD, formatUsd, priceDecimals } from '../lib/perps';
-import { useAllOrders, useMarketTrades } from '../hooks';
+import { useAllOrders, useLiquidations, useMarketTrades } from '../hooks';
 import { explorerTxUrl } from '../client';
 
 const LEVELS = 8;
@@ -31,8 +31,8 @@ function group(orders: { price: bigint; size: bigint; mine: boolean }[], tick: b
   return sorted;
 }
 
-export function OrderBook({ market, owner }: { market: MarketInfo; owner: Address | null }) {
-  const [tab, setTab] = useState<'book' | 'trades'>('book');
+export function OrderBook({ market, markets, owner }: { market: MarketInfo; markets: MarketInfo[]; owner: Address | null }) {
+  const [tab, setTab] = useState<'book' | 'trades' | 'liquidations'>('book');
   const [scale, setScale] = useState(1n);
   const { data: orders, isLoading } = useAllOrders();
   const mark = market.data.price;
@@ -69,6 +69,7 @@ export function OrderBook({ market, owner }: { market: MarketInfo; owner: Addres
         <div className="segmented small" role="tablist" aria-label="Order book">
           <button role="tab" aria-selected={tab === 'book'} className={tab === 'book' ? 'active' : ''} onClick={() => setTab('book')}>Book</button>
           <button role="tab" aria-selected={tab === 'trades'} className={tab === 'trades' ? 'active' : ''} onClick={() => setTab('trades')}>Trades</button>
+          <button role="tab" aria-selected={tab === 'liquidations'} className={tab === 'liquidations' ? 'active' : ''} onClick={() => setTab('liquidations')}>Liqs</button>
         </div>
         {tab === 'book' && (
           <button
@@ -103,8 +104,10 @@ export function OrderBook({ market, owner }: { market: MarketInfo; owner: Addres
             Resting limit orders from every trader. Market orders fill instantly at the oracle price against the pool, so they never wait in the book.
           </p>
         </>
-      ) : (
+      ) : tab === 'trades' ? (
         <TradesFeed market={market} />
+      ) : (
+        <LiquidationFeed markets={markets} owner={owner} />
       )}
     </section>
   );
@@ -136,6 +139,54 @@ function TradesFeed({ market }: { market: MarketInfo }) {
           </li>
         ))}
       </ul>
+    </>
+  );
+}
+
+function ago(seconds: number): string {
+  if (seconds < 60) return `${Math.max(0, seconds)}s ago`;
+  if (seconds < 3_600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3_600)}h ago`;
+  return `${Math.floor(seconds / 86_400)}d ago`;
+}
+
+/** Every market's recent liquidations, from the exchange's on-chain feed. */
+function LiquidationFeed({ markets, owner }: { markets: MarketInfo[]; owner: Address | null }) {
+  const { data: liquidations, isLoading } = useLiquidations();
+  const now = Math.floor(Date.now() / 1000);
+  if (!liquidations?.length) {
+    return <p className="book-empty faint small">{isLoading ? 'Loading liquidations…' : 'No liquidations yet.'}</p>;
+  }
+  return (
+    <>
+      <div className="book-head">
+        <span>Position</span>
+        <span className="num">Size (USD)</span>
+        <span className="num">When</span>
+      </div>
+      <ul className="book-side trades liq-feed">
+        {liquidations.map((l) => {
+          const market = markets.find((m) => m.address === l.market);
+          const isLong = l.side === Side.Long;
+          const mine = l.owner === owner;
+          return (
+            <li
+              key={`${l.owner}-${l.time}-${l.market}`}
+              className="book-row"
+              title={`${isLong ? 'Long' : 'Short'} liquidated at $${formatUsd(l.price, priceDecimals(l.price))} · collateral $${formatUsd(l.collateral)} · keeper reward $${formatUsd(l.liquidatorReward)}`}
+            >
+              <span className="book-price">
+                {mine && <span className="book-mine" aria-label="Your position" />}
+                <span className={isLong ? 'pos' : 'neg'}>{isLong ? 'Long' : 'Short'}</span>{' '}
+                <span className="faint">{market?.symbol.replace(/-PERP$/, '') ?? '?'} @ {formatUsd(l.price, priceDecimals(l.price))}</span>
+              </span>
+              <span className="mono num">{formatUsd(l.sizeUsd, 0)}</span>
+              <span className="mono num faint">{ago(now - Number(l.time))}</span>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="fine left">Positions whose equity fell below maintenance margin, closed by a keeper for a fee. Hover a row for details.</p>
     </>
   );
 }

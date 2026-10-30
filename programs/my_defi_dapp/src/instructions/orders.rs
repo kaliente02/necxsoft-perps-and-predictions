@@ -35,8 +35,9 @@ pub struct PlaceOrder<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Place a resting order. Limit orders escrow their collateral in the vault; take-profit and
-/// stop-loss orders close `size_usd` of the matching position (0 = all of it) when triggered.
+/// Place a resting order. Limit and stop-entry orders escrow their collateral in the vault;
+/// take-profit and stop-loss orders close `size_usd` of the matching position (0 = all of it)
+/// when triggered.
 pub fn handle_place_order(
     ctx: Context<PlaceOrder>,
     id: u64,
@@ -51,7 +52,7 @@ pub fn handle_place_order(
     let params = exchange.params;
     require!(trigger_price > 0, ErrorCode::InvalidPrice);
 
-    if kind == OrderKind::Limit {
+    if kind.opens() {
         require!(!exchange.paused, ErrorCode::Paused);
         require!(size_usd > 0 && collateral > 0, ErrorCode::ZeroAmount);
         require!(
@@ -167,7 +168,7 @@ pub struct ExecuteLimitOrder<'info> {
         close = executor,
         has_one = owner,
         has_one = market,
-        constraint = order.kind == OrderKind::Limit @ ErrorCode::InvalidOrder,
+        constraint = order.kind.opens() @ ErrorCode::InvalidOrder,
         seeds = [ORDER_SEED, owner.key().as_ref(), &order.id.to_le_bytes()],
         bump = order.bump,
     )]
@@ -185,7 +186,7 @@ pub struct ExecuteLimitOrder<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Fill a triggered limit order at the oracle price using its escrowed collateral.
+/// Fill a triggered limit or stop-entry order at the oracle price using its escrowed collateral.
 pub fn handle_execute_limit_order(ctx: Context<ExecuteLimitOrder>) -> Result<()> {
     let now = Clock::get()?.unix_timestamp;
     let accounts = &mut *ctx.accounts;
@@ -195,7 +196,7 @@ pub fn handle_execute_limit_order(ctx: Context<ExecuteLimitOrder>) -> Result<()>
     let order = &accounts.order;
     require!(!exchange.paused, ErrorCode::Paused);
 
-    market.accrue_borrow(now)?;
+    market.accrue_fees(now)?;
     let price = market.fresh_price(now, exchange.params.max_price_age_secs)?;
     require!(order.triggered(price), ErrorCode::OrderNotTriggered);
     if position.size_usd == 0 {
@@ -241,7 +242,7 @@ pub struct ExecuteTriggerOrder<'info> {
         close = executor,
         has_one = owner,
         has_one = market,
-        constraint = order.kind != OrderKind::Limit @ ErrorCode::InvalidOrder,
+        constraint = !order.kind.opens() @ ErrorCode::InvalidOrder,
         seeds = [ORDER_SEED, owner.key().as_ref(), &order.id.to_le_bytes()],
         bump = order.bump,
     )]
@@ -277,7 +278,7 @@ pub fn handle_execute_trigger_order(ctx: Context<ExecuteTriggerOrder>) -> Result
     let position = &mut accounts.position;
     let order = &accounts.order;
 
-    market.accrue_borrow(now)?;
+    market.accrue_fees(now)?;
     let price = market.fresh_price(now, exchange.params.max_price_age_secs)?;
     require!(order.triggered(price), ErrorCode::OrderNotTriggered);
 

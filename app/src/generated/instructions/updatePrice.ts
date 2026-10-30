@@ -34,12 +34,14 @@ import {
 } from "@solana/kit";
 import {
   getAccountMetaFactory,
+  getAddressFromResolvedInstructionAccount,
   type InstructionAccountInput,
   type InstructionAccountInputAddress,
   type InstructionSignerInput,
   type ResolvedInstructionAccount,
   type ResolvedInstructionAccountMeta,
 } from "@solana/program-client-core";
+import { findHistoryPda } from "../pdas";
 import { MY_DEFI_DAPP_PROGRAM_ADDRESS } from "../programs";
 
 export const UPDATE_PRICE_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
@@ -56,6 +58,7 @@ export type UpdatePriceInstruction<
   TProgram extends string = typeof MY_DEFI_DAPP_PROGRAM_ADDRESS,
   TAccountOracleAuthority extends string | AccountMeta<string> = string,
   TAccountMarket extends string | AccountMeta<string> = string,
+  TAccountHistory extends string | AccountMeta<string> = string,
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
 > = Instruction<TProgram> &
   InstructionWithData<ReadonlyUint8Array> &
@@ -68,6 +71,9 @@ export type UpdatePriceInstruction<
       TAccountMarket extends string
         ? WritableAccount<TAccountMarket>
         : TAccountMarket,
+      TAccountHistory extends string
+        ? WritableAccount<TAccountHistory>
+        : TAccountHistory,
       ...TRemainingAccounts,
     ]
   >;
@@ -106,34 +112,48 @@ export function getUpdatePriceInstructionDataCodec(): FixedSizeCodec<
   );
 }
 
-export type UpdatePriceInput<
+export type UpdatePriceAsyncInput<
   TAccountOracleAuthority extends InstructionSignerInput =
     InstructionSignerInput,
   TAccountMarket extends InstructionAccountInput = InstructionAccountInput,
+  TAccountHistory extends InstructionAccountInput = InstructionAccountInput,
 > = {
   oracleAuthority: TAccountOracleAuthority;
   market: TAccountMarket;
+  /** The market's hourly history; when passed, the first price each hour is recorded. */
+  history?: TAccountHistory;
   price: UpdatePriceInstructionDataArgs["price"];
 };
 
-export function getUpdatePriceInstruction<
+export async function getUpdatePriceInstructionAsync<
   TAccountOracleAuthority extends InstructionSignerInput,
   TAccountMarket extends InstructionAccountInput,
+  TAccountHistory extends InstructionAccountInput,
   TProgramAddress extends Address = typeof MY_DEFI_DAPP_PROGRAM_ADDRESS,
 >(
-  input: UpdatePriceInput<TAccountOracleAuthority, TAccountMarket>,
+  input: UpdatePriceAsyncInput<
+    TAccountOracleAuthority,
+    TAccountMarket,
+    TAccountHistory
+  >,
   config?: {
     programAddress?: TProgramAddress | { readonly address: TProgramAddress };
   },
-): UpdatePriceInstruction<
-  TProgramAddress,
-  ResolvedInstructionAccountMeta<
-    TAccountOracleAuthority,
-    InstructionAccountInputAddress<TAccountOracleAuthority>
-  >,
-  ResolvedInstructionAccountMeta<
-    TAccountMarket,
-    InstructionAccountInputAddress<TAccountMarket>
+): Promise<
+  UpdatePriceInstruction<
+    TProgramAddress,
+    ResolvedInstructionAccountMeta<
+      TAccountOracleAuthority,
+      InstructionAccountInputAddress<TAccountOracleAuthority>
+    >,
+    ResolvedInstructionAccountMeta<
+      TAccountMarket,
+      InstructionAccountInputAddress<TAccountMarket>
+    >,
+    ResolvedInstructionAccountMeta<
+      TAccountHistory,
+      InstructionAccountInputAddress<TAccountHistory>
+    >
   >
 > {
   // Program address.
@@ -155,6 +175,11 @@ export function getUpdatePriceInstruction<
       isWritable: false,
     },
     market: { value: input.market ?? null, isSigner: false, isWritable: true },
+    history: {
+      value: input.history ?? null,
+      isSigner: false,
+      isWritable: true,
+    },
   };
   const accounts = originalAccounts as Record<
     keyof typeof originalAccounts,
@@ -164,10 +189,24 @@ export function getUpdatePriceInstruction<
   // Original args.
   const args = { ...input };
 
+  // Resolve default values.
+  if (!accounts.history.value) {
+    accounts.history.value = await findHistoryPda(
+      {
+        market: getAddressFromResolvedInstructionAccount(
+          "market",
+          accounts.market.value,
+        ),
+      },
+      { programAddress },
+    );
+  }
+
   return Object.freeze({
     accounts: [
       getAccountMeta("oracleAuthority", accounts.oracleAuthority),
       getAccountMeta("market", accounts.market),
+      getAccountMeta("history", accounts.history),
     ],
     data: getUpdatePriceInstructionDataEncoder().encode(
       args as UpdatePriceInstructionDataArgs,
@@ -182,6 +221,112 @@ export function getUpdatePriceInstruction<
     ResolvedInstructionAccountMeta<
       TAccountMarket,
       InstructionAccountInputAddress<TAccountMarket>
+    >,
+    ResolvedInstructionAccountMeta<
+      TAccountHistory,
+      InstructionAccountInputAddress<TAccountHistory>
+    >
+  >);
+}
+
+export type UpdatePriceInput<
+  TAccountOracleAuthority extends InstructionSignerInput =
+    InstructionSignerInput,
+  TAccountMarket extends InstructionAccountInput = InstructionAccountInput,
+  TAccountHistory extends InstructionAccountInput = InstructionAccountInput,
+> = {
+  oracleAuthority: TAccountOracleAuthority;
+  market: TAccountMarket;
+  /** The market's hourly history; when passed, the first price each hour is recorded. */
+  history?: TAccountHistory;
+  price: UpdatePriceInstructionDataArgs["price"];
+};
+
+export function getUpdatePriceInstruction<
+  TAccountOracleAuthority extends InstructionSignerInput,
+  TAccountMarket extends InstructionAccountInput,
+  TAccountHistory extends InstructionAccountInput,
+  TProgramAddress extends Address = typeof MY_DEFI_DAPP_PROGRAM_ADDRESS,
+>(
+  input: UpdatePriceInput<
+    TAccountOracleAuthority,
+    TAccountMarket,
+    TAccountHistory
+  >,
+  config?: {
+    programAddress?: TProgramAddress | { readonly address: TProgramAddress };
+  },
+): UpdatePriceInstruction<
+  TProgramAddress,
+  ResolvedInstructionAccountMeta<
+    TAccountOracleAuthority,
+    InstructionAccountInputAddress<TAccountOracleAuthority>
+  >,
+  ResolvedInstructionAccountMeta<
+    TAccountMarket,
+    InstructionAccountInputAddress<TAccountMarket>
+  >,
+  ResolvedInstructionAccountMeta<
+    TAccountHistory,
+    InstructionAccountInputAddress<TAccountHistory>
+  >
+> {
+  // Program address.
+  const programAddressInput =
+    config?.programAddress ?? MY_DEFI_DAPP_PROGRAM_ADDRESS;
+  const programAddress =
+    typeof programAddressInput === "string"
+      ? programAddressInput
+      : programAddressInput.address;
+
+  // Account meta helper.
+  const getAccountMeta = getAccountMetaFactory(programAddress, "programId");
+
+  // Original accounts.
+  const originalAccounts = {
+    oracleAuthority: {
+      value: input.oracleAuthority ?? null,
+      isSigner: true,
+      isWritable: false,
+    },
+    market: { value: input.market ?? null, isSigner: false, isWritable: true },
+    history: {
+      value: input.history ?? null,
+      isSigner: false,
+      isWritable: true,
+    },
+  };
+  const accounts = originalAccounts as Record<
+    keyof typeof originalAccounts,
+    ResolvedInstructionAccount
+  >;
+
+  // Original args.
+  const args = { ...input };
+
+  return Object.freeze({
+    accounts: [
+      getAccountMeta("oracleAuthority", accounts.oracleAuthority),
+      getAccountMeta("market", accounts.market),
+      getAccountMeta("history", accounts.history),
+    ],
+    data: getUpdatePriceInstructionDataEncoder().encode(
+      args as UpdatePriceInstructionDataArgs,
+    ),
+    programAddress,
+  } as UpdatePriceInstruction<
+    TProgramAddress,
+    ResolvedInstructionAccountMeta<
+      TAccountOracleAuthority,
+      InstructionAccountInputAddress<TAccountOracleAuthority>
+    >,
+    ResolvedInstructionAccountMeta<
+      TAccountMarket,
+      InstructionAccountInputAddress<TAccountMarket>
+    >,
+    ResolvedInstructionAccountMeta<
+      TAccountHistory,
+      InstructionAccountInputAddress<TAccountHistory>
     >
   >);
 }
@@ -194,6 +339,8 @@ export type ParsedUpdatePriceInstruction<
   accounts: {
     oracleAuthority: TAccountMetas[0];
     market: TAccountMetas[1];
+    /** The market's hourly history; when passed, the first price each hour is recorded. */
+    history?: TAccountMetas[2] | undefined;
   };
   data: UpdatePriceInstructionData;
 };
@@ -206,12 +353,12 @@ export function parseUpdatePriceInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedUpdatePriceInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 2) {
+  if (instruction.accounts.length < 3) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 2,
+        expectedAccountMetas: 3,
       },
     );
   }
@@ -221,9 +368,19 @@ export function parseUpdatePriceInstruction<
     accountIndex += 1;
     return accountMeta;
   };
+  const getNextOptionalAccount = () => {
+    const accountMeta = getNextAccount();
+    return accountMeta.address === MY_DEFI_DAPP_PROGRAM_ADDRESS
+      ? undefined
+      : accountMeta;
+  };
   return {
     programAddress: instruction.programAddress,
-    accounts: { oracleAuthority: getNextAccount(), market: getNextAccount() },
+    accounts: {
+      oracleAuthority: getNextAccount(),
+      market: getNextAccount(),
+      history: getNextOptionalAccount(),
+    },
     data: getUpdatePriceInstructionDataDecoder().decode(instruction.data),
   };
 }

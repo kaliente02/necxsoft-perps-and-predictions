@@ -5,8 +5,9 @@ import { useClient } from '@solana/react';
 import { useConnectedWallet } from '@solana/kit-plugin-wallet/react';
 import type { AppClient } from './client';
 import { type PerpsState, loadHistory, loadMarketTrades, loadOrders, loadPerpsState, loadPositions, tokenBalance } from './lib/perps';
+import { loadLiquidations, loadMarketHistory } from './lib/history';
 import { loadFlows } from './lib/portfolio';
-import { loadPredictionPositions, loadPredictions, loadProbabilityHistory } from './lib/predict';
+import { loadPredictionPositions, loadPredictionResults, loadPredictions, loadProbabilityHistory } from './lib/predict';
 
 const REFRESH_MS = 3_000;
 
@@ -93,4 +94,22 @@ export function useAllOrders() {
 export function useMarketTrades(market: Address | undefined) {
   const { rpc } = useClient<AppClient>();
   return useSWR(market ? ['market-trades', market] : null, () => loadMarketTrades(rpc, market!), { refreshInterval: 10_000 });
+}
+
+/** A market's on-chain hourly samples (funding, open interest, price). */
+export function useMarketHistory(market: Address | undefined) {
+  const { rpc } = useClient<AppClient>();
+  return useSWR(market ? ['market-history', market] : null, () => loadMarketHistory(rpc, market!), { refreshInterval: 60_000 });
+}
+
+/** The exchange's recent liquidations, from the on-chain feed. */
+export function useLiquidations() {
+  const { rpc } = useClient<AppClient>();
+  return useSWR('liquidations', () => loadLiquidations(rpc), { refreshInterval: 10_000 });
+}
+
+/** The owner's prediction results per market, including redeemed (closed) positions. */
+export function usePredictionResults(owner: Address | null) {
+  const { rpc } = useClient<AppClient>();
+  return useSWR(owner ? ['prediction-results', owner] : null, () => loadPredictionResults(rpc, owner!), { refreshInterval: 30_000 });
 }

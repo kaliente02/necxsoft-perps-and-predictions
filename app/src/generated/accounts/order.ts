@@ -74,9 +74,9 @@ export type Order = {
   triggerPrice: bigint;
   /** true: fills when price >= trigger_price; false: when price <= trigger_price. */
   triggerAbove: boolean;
-  /** Limit: size to open. Take-profit / stop-loss: size to close, 0 = the entire position. */
+  /** Limit / stop entry: size to open. Take-profit / stop-loss: size to close, 0 = the entire position. */
   sizeUsd: bigint;
-  /** Limit only: collateral escrowed in the vault until the order fills or is cancelled. */
+  /** Limit / stop entry: collateral escrowed in the vault until the order fills or is cancelled. */
   collateral: bigint;
   /** Client-chosen id, part of the PDA seeds so an owner can hold many orders. */
   id: bigint;
@@ -92,9 +92,9 @@ export type OrderArgs = {
   triggerPrice: number | bigint;
   /** true: fills when price >= trigger_price; false: when price <= trigger_price. */
   triggerAbove: boolean;
-  /** Limit: size to open. Take-profit / stop-loss: size to close, 0 = the entire position. */
+  /** Limit / stop entry: size to open. Take-profit / stop-loss: size to close, 0 = the entire position. */
   sizeUsd: number | bigint;
-  /** Limit only: collateral escrowed in the vault until the order fills or is cancelled. */
+  /** Limit / stop entry: collateral escrowed in the vault until the order fills or is cancelled. */
   collateral: number | bigint;
   /** Client-chosen id, part of the PDA seeds so an owner can hold many orders. */
   id: number | bigint;

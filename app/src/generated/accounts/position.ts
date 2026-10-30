@@ -19,6 +19,8 @@ import {
   getAddressEncoder,
   getBytesDecoder,
   getBytesEncoder,
+  getI128Decoder,
+  getI128Encoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -74,6 +76,11 @@ export type Position = {
   base: bigint;
   /** Size-weighted average entry price. */
   entryPrice: bigint;
+  /**
+   * The market's fee index for this side (borrow + funding) when fees were last settled.
+   * Positions opened before funding stored the borrow index here as a u128; the bytes of
+   * those non-negative values read the same as an i128.
+   */
   entryBorrowIndex: bigint;
   openedAt: bigint;
   lastUpdated: bigint;
@@ -92,6 +99,11 @@ export type PositionArgs = {
   base: number | bigint;
   /** Size-weighted average entry price. */
   entryPrice: number | bigint;
+  /**
+   * The market's fee index for this side (borrow + funding) when fees were last settled.
+   * Positions opened before funding stored the borrow index here as a u128; the bytes of
+   * those non-negative values read the same as an i128.
+   */
   entryBorrowIndex: number | bigint;
   openedAt: number | bigint;
   lastUpdated: number | bigint;
@@ -110,7 +122,7 @@ export function getPositionEncoder(): FixedSizeEncoder<PositionArgs> {
       ["collateral", getU64Encoder()],
       ["base", getU128Encoder()],
       ["entryPrice", getU64Encoder()],
-      ["entryBorrowIndex", getU128Encoder()],
+      ["entryBorrowIndex", getI128Encoder()],
       ["openedAt", getI64Encoder()],
       ["lastUpdated", getI64Encoder()],
       ["bump", getU8Encoder()],
@@ -130,7 +142,7 @@ export function getPositionDecoder(): FixedSizeDecoder<Position> {
     ["collateral", getU64Decoder()],
     ["base", getU128Decoder()],
     ["entryPrice", getU64Decoder()],
-    ["entryBorrowIndex", getU128Decoder()],
+    ["entryBorrowIndex", getI128Decoder()],
     ["openedAt", getI64Decoder()],
     ["lastUpdated", getI64Decoder()],
     ["bump", getU8Decoder()],

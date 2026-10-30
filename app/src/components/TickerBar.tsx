@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { dayStats, useCandles } from '../lib/candles';
-import { BPS, type MarketInfo, type PerpsState, formatUsd, priceDecimals } from '../lib/perps';
+import { BPS, type MarketInfo, type PerpsState, formatHourlyRate, formatUsd, priceDecimals } from '../lib/perps';
 
 const ASSET_NAMES: Record<string, string> = { SOL: 'Solana', BTC: 'Bitcoin', ETH: 'Ethereum' };
 
@@ -144,7 +144,13 @@ export function TickerBar({
         </div>
         <div>
           <dt>Borrow rate</dt>
-          <dd>{(Number(market.data.hourlyBorrowRate) / 1e7).toFixed(4)}% / h</dd>
+          <dd>{formatHourlyRate(market.data.hourlyBorrowRate)} / h</dd>
+        </div>
+        <div>
+          <dt>Funding (longs)</dt>
+          <dd className={market.data.fundingRate > 0n ? 'neg' : market.data.fundingRate < 0n ? 'pos' : ''}>
+            {formatHourlyRate(market.data.fundingRate, true)} / h
+          </dd>
         </div>
         <div>
           <dt>Oracle</dt>

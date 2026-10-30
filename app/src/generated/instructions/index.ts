@@ -11,6 +11,7 @@ export * from "./addMarket";
 export * from "./buyShares";
 export * from "./cancelOrder";
 export * from "./closePosition";
+export * from "./configureMarket";
 export * from "./createPrediction";
 export * from "./decreasePosition";
 export * from "./executeLimitOrder";

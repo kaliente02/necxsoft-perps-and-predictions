@@ -14,6 +14,14 @@ export const EXCHANGE_SEED: ReadonlyUint8Array = new Uint8Array([
   101, 120, 99, 104, 97, 110, 103, 101,
 ]);
 
+export const HISTORY_SEED: ReadonlyUint8Array = new Uint8Array([
+  104, 105, 115, 116, 111, 114, 121,
+]);
+
+export const LIQUIDATION_FEED_SEED: ReadonlyUint8Array = new Uint8Array([
+  108, 105, 113, 117, 105, 100, 97, 116, 105, 111, 110, 115,
+]);
+
 export const LP_MINT_SEED: ReadonlyUint8Array = new Uint8Array([
   108, 112, 95, 109, 105, 110, 116,
 ]);

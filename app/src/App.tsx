@@ -5,6 +5,7 @@ import { useClient } from '@solana/react';
 import type { AppClient } from './client';
 import { AccountSummary } from './components/AccountSummary';
 import { Footer } from './components/Footer';
+import { FundingCard } from './components/FundingCard';
 import { Nav, type Page } from './components/Nav';
 import { OrderBook } from './components/OrderBook';
 import { OrderPanel } from './components/OrderPanel';
@@ -97,8 +98,9 @@ npm run keeper`}</pre>
           <div className="trade-main">
             <div className="chart-row">
               <PriceChart symbol={market.symbol} markPrice={Number(market.data.price) / 1e6} />
-              <OrderBook market={market} owner={owner} />
+              <OrderBook market={market} markets={state.markets} owner={owner} />
             </div>
+            <FundingCard market={market} now={now} />
             <Positions
               state={state}
               positions={positions}

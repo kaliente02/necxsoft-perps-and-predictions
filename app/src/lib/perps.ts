@@ -121,10 +121,32 @@ export async function loadPositions(rpc: Rpc<SolanaRpcApi>, state: PerpsState, o
 
 // ---------- math (bigint, 6-decimal USD) ----------
 
-export function currentBorrowIndex(market: Market, nowSecs: bigint): bigint {
+/** The market's fee index (borrow + funding) for `side` at `nowSecs`, as the program would accrue it. */
+export function currentFeeIndex(market: Market, side: Side, nowSecs: bigint): bigint {
+  const index = side === Side.Long ? market.longFeeIndex : market.shortFeeIndex;
   const elapsed = nowSecs - market.lastBorrowUpdate;
-  if (elapsed <= 0n) return market.cumulativeBorrowIndex;
-  return market.cumulativeBorrowIndex + (market.hourlyBorrowRate * elapsed) / 3600n;
+  if (elapsed <= 0n) return index;
+  const borrow = (market.hourlyBorrowRate * elapsed) / 3600n;
+  // Rust's i128 division truncates toward zero, like bigint division.
+  const funding = (market.fundingRate * elapsed) / 3600n;
+  return index + borrow + (side === Side.Long ? funding : -funding);
+}
+
+/** Hourly rate (BORROW_RATE_SCALE) as a percentage string, e.g. "0.0100%". */
+export function formatHourlyRate(rate: bigint, signed = false): string {
+  const pct = (Number(rate) / Number(BORROW_RATE_SCALE)) * 100;
+  return `${signed && pct > 0 ? '+' : ''}${pct.toFixed(4)}%`;
+}
+
+/** "Pays 0.0033% / h" for a side's funding rate (negative = receives). */
+export function fundingText(sideRate: bigint): string {
+  if (sideRate === 0n) return '0% / h';
+  return `${sideRate > 0n ? 'Pays' : 'Earns'} ${formatHourlyRate(sideRate > 0n ? sideRate : -sideRate)} / h`;
+}
+
+/** Funding a side pays per hour (negative = receives), scaled by BORROW_RATE_SCALE. */
+export function sideFundingRate(market: Market, side: Side): bigint {
+  return side === Side.Long ? market.fundingRate : -market.fundingRate;
 }
 
 export function positionPnl(position: Position, price: bigint): bigint {
@@ -134,7 +156,8 @@ export function positionPnl(position: Position, price: bigint): bigint {
 
 export type Valuation = {
   pnl: bigint;
-  borrowFee: bigint;
+  /** Borrow fees plus funding owed since the last settlement; negative when funding received exceeds them. */
+  accruedFees: bigint;
   closeFee: bigint;
   equity: bigint;
   maintenanceMargin: bigint;
@@ -150,19 +173,19 @@ export function valuePosition(
   nowSecs: bigint,
 ): Valuation {
   const pnl = positionPnl(position, price);
-  const borrowFee =
-    (position.sizeUsd * (currentBorrowIndex(market, nowSecs) - position.entryBorrowIndex)) / BORROW_RATE_SCALE;
+  const accruedFees =
+    (position.sizeUsd * (currentFeeIndex(market, position.side, nowSecs) - position.entryBorrowIndex)) / BORROW_RATE_SCALE;
   const closeFee = (position.sizeUsd * BigInt(exchange.params.tradeFeeBps)) / BPS;
-  const equity = position.collateral + pnl - borrowFee - closeFee;
+  const equity = position.collateral + pnl - accruedFees - closeFee;
   const maintenanceMargin = (position.sizeUsd * BigInt(exchange.params.maintenanceMarginBps)) / BPS;
   return {
     pnl,
-    borrowFee,
+    accruedFees,
     closeFee,
     equity,
     maintenanceMargin,
     liquidatable: equity < maintenanceMargin,
-    liquidationPrice: liquidationPrice(position.side, position.sizeUsd, position.base, position.collateral - borrowFee - closeFee, maintenanceMargin),
+    liquidationPrice: liquidationPrice(position.side, position.sizeUsd, position.base, position.collateral - accruedFees - closeFee, maintenanceMargin),
   };
 }
 
@@ -338,10 +361,15 @@ export async function loadOrders(rpc: Rpc<SolanaRpcApi>, owner?: Address): Promi
     .sort((a, b) => Number(b.data.createdAt - a.data.createdAt));
 }
 
+/** Limit and stop-entry orders open positions (and escrow collateral); TP / SL orders close them. */
+export function opensPosition(kind: OrderKind): boolean {
+  return kind === OrderKind.Limit || kind === OrderKind.StopEntry;
+}
+
 /** Whether a take-profit / stop-loss order belongs to this position. */
 export function isAttached(order: OrderInfo, position: PositionInfo): boolean {
   return (
-    order.data.kind !== OrderKind.Limit &&
+    !opensPosition(order.data.kind) &&
     order.data.market === position.market.address &&
     order.data.side === position.data.side
   );
@@ -389,16 +417,25 @@ export async function cancelOrderIx(state: PerpsState, owner: TransactionSigner,
 export function triggerProblem(kind: OrderKind, side: Side, triggerPrice: bigint, mark: bigint): string | null {
   if (triggerPrice <= 0n) return 'Enter a trigger price';
   const isLong = side === Side.Long;
-  // Limit buys below / sells above the mark; TP is in the position's favour; SL against it.
-  const mustBeBelow =
-    kind === OrderKind.Limit ? isLong : kind === OrderKind.TakeProfit ? !isLong : isLong;
+  // Limit buys below / sells above the mark; a stop entry buys above / sells below it;
+  // TP is in the position's favour; SL against it.
+  const mustBeBelow = kind === OrderKind.TakeProfit || kind === OrderKind.StopEntry ? !isLong : isLong;
   if (mustBeBelow && triggerPrice >= mark) return `${orderKindLabel(kind)} price must be below the mark price`;
   if (!mustBeBelow && triggerPrice <= mark) return `${orderKindLabel(kind)} price must be above the mark price`;
   return null;
 }
 
 export function orderKindLabel(kind: OrderKind): string {
-  return kind === OrderKind.Limit ? 'Limit' : kind === OrderKind.TakeProfit ? 'Take profit' : 'Stop loss';
+  switch (kind) {
+    case OrderKind.Limit:
+      return 'Limit';
+    case OrderKind.StopEntry:
+      return 'Stop';
+    case OrderKind.TakeProfit:
+      return 'Take profit';
+    default:
+      return 'Stop loss';
+  }
 }
 
 /** Estimated PnL (before fees) of closing `sizeUsd` of a position at `price`. */

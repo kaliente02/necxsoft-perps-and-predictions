@@ -115,15 +115,15 @@ function CollateralForm({ state, position, now, usdcBalance, onDone }: {
   const p = position.data;
   const v = valuePosition(p, market.data, state.exchange, market.data.price, now);
   const value = parseUsd(amount) ?? 0n;
-  // Borrow fees are settled out of collateral by either action.
-  const newCollateral = adding ? p.collateral + value - v.borrowFee : p.collateral - value - v.borrowFee;
+  // Borrow fees and funding are settled against collateral by either action.
+  const newCollateral = adding ? p.collateral + value - v.accruedFees : p.collateral - value - v.accruedFees;
   const newLeverage = newCollateral > 0n ? Number(p.sizeUsd) / Number(newCollateral) : Infinity;
   const newEquity = newCollateral + v.pnl - v.closeFee;
   // Keep a 1% buffer over every on-chain limit so price ticks between now and execution don't fail the withdrawal.
   const maxRemovable = (() => {
-    const byLeverage = p.collateral - v.borrowFee - (p.sizeUsd * 101n) / (100n * BigInt(params.maxLeverage));
-    const byMargin = p.collateral - v.borrowFee + v.pnl - v.closeFee - (v.maintenanceMargin * 101n) / 100n;
-    const byMinimum = p.collateral - v.borrowFee - params.minCollateral;
+    const byLeverage = p.collateral - v.accruedFees - (p.sizeUsd * 101n) / (100n * BigInt(params.maxLeverage));
+    const byMargin = p.collateral - v.accruedFees + v.pnl - v.closeFee - (v.maintenanceMargin * 101n) / 100n;
+    const byMinimum = p.collateral - v.accruedFees - params.minCollateral;
     const max = [byLeverage, byMargin, byMinimum].reduce((a, b) => (a < b ? a : b));
     return max > 0n ? max : 0n;
   })();
@@ -169,7 +169,7 @@ function CollateralForm({ state, position, now, usdcBalance, onDone }: {
       <dl className="kv">
         <div><dt>Leverage</dt><dd className="mono">{(Number(p.sizeUsd) / Number(p.collateral || 1n)).toFixed(2)}× → {value > 0n && Number.isFinite(newLeverage) ? `${newLeverage.toFixed(2)}×` : '—'}</dd></div>
         <div><dt>Collateral after</dt><dd className="mono">{value > 0n ? `$${formatUsd(newCollateral > 0n ? newCollateral : 0n)}` : '—'}</dd></div>
-        {v.borrowFee > 0n && <div><dt>Borrow fee settled</dt><dd className="mono">−${formatUsd(v.borrowFee)}</dd></div>}
+        {v.accruedFees !== 0n && <div><dt>Borrow &amp; funding settled</dt><dd className="mono">{signedUsd(-v.accruedFees)}</dd></div>}
       </dl>
       <div className="modal-actions single">
         <button className="btn btn-primary btn-block" disabled={problem != null || isRunning} onClick={submit}>
@@ -201,7 +201,7 @@ function PartialCloseForm({ state, position, now, onDone }: {
   // Mirrors apply_decrease: proportional collateral out, profit paid on top, losses kept by the position.
   const collateralOut = p.sizeUsd > 0n ? (p.collateral * size) / p.sizeUsd : 0n;
   const pnl = pnlAt(p, size, price);
-  const fees = v.borrowFee + (size * BigInt(params.tradeFeeBps)) / BPS;
+  const fees = v.accruedFees + (size * BigInt(params.tradeFeeBps)) / BPS;
   const realized = pnl - fees;
   const receive = collateralOut + (realized > 0n ? realized : 0n);
   const remainingCollateral = p.collateral - collateralOut + (realized < 0n ? realized : 0n);

@@ -39,7 +39,7 @@ import {
   type ResolvedInstructionAccount,
   type ResolvedInstructionAccountMeta,
 } from "@solana/program-client-core";
-import { findExchangePda } from "../pdas";
+import { findExchangePda, findLiquidationFeedPda } from "../pdas";
 import { MY_DEFI_DAPP_PROGRAM_ADDRESS } from "../programs";
 
 export const LIQUIDATE_DISCRIMINATOR: ReadonlyUint8Array = new Uint8Array([
@@ -60,6 +60,7 @@ export type LiquidateInstruction<
   TAccountOwnerCollateral extends string | AccountMeta<string> = string,
   TAccountLiquidatorCollateral extends string | AccountMeta<string> = string,
   TAccountVault extends string | AccountMeta<string> = string,
+  TAccountLiquidationFeed extends string | AccountMeta<string> = string,
   TAccountTokenProgram extends string | AccountMeta<string> =
     "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
   TRemainingAccounts extends readonly AccountMeta<string>[] = [],
@@ -92,6 +93,9 @@ export type LiquidateInstruction<
       TAccountVault extends string
         ? WritableAccount<TAccountVault>
         : TAccountVault,
+      TAccountLiquidationFeed extends string
+        ? WritableAccount<TAccountLiquidationFeed>
+        : TAccountLiquidationFeed,
       TAccountTokenProgram extends string
         ? ReadonlyAccount<TAccountTokenProgram>
         : TAccountTokenProgram,
@@ -137,6 +141,8 @@ export type LiquidateAsyncInput<
   TAccountLiquidatorCollateral extends InstructionAccountInput =
     InstructionAccountInput,
   TAccountVault extends InstructionAccountInput = InstructionAccountInput,
+  TAccountLiquidationFeed extends InstructionAccountInput =
+    InstructionAccountInput,
   TAccountTokenProgram extends InstructionAccountInput =
     InstructionAccountInput,
 > = {
@@ -148,6 +154,7 @@ export type LiquidateAsyncInput<
   ownerCollateral: TAccountOwnerCollateral;
   liquidatorCollateral: TAccountLiquidatorCollateral;
   vault: TAccountVault;
+  liquidationFeed?: TAccountLiquidationFeed;
   tokenProgram?: TAccountTokenProgram;
 };
 
@@ -160,6 +167,7 @@ export async function getLiquidateInstructionAsync<
   TAccountOwnerCollateral extends InstructionAccountInput,
   TAccountLiquidatorCollateral extends InstructionAccountInput,
   TAccountVault extends InstructionAccountInput,
+  TAccountLiquidationFeed extends InstructionAccountInput,
   TAccountTokenProgram extends InstructionAccountInput,
   TProgramAddress extends Address = typeof MY_DEFI_DAPP_PROGRAM_ADDRESS,
 >(
@@ -172,6 +180,7 @@ export async function getLiquidateInstructionAsync<
     TAccountOwnerCollateral,
     TAccountLiquidatorCollateral,
     TAccountVault,
+    TAccountLiquidationFeed,
     TAccountTokenProgram
   >,
   config?: {
@@ -211,6 +220,10 @@ export async function getLiquidateInstructionAsync<
     ResolvedInstructionAccountMeta<
       TAccountVault,
       InstructionAccountInputAddress<TAccountVault>
+    >,
+    ResolvedInstructionAccountMeta<
+      TAccountLiquidationFeed,
+      InstructionAccountInputAddress<TAccountLiquidationFeed>
     >,
     ResolvedInstructionAccountMeta<
       TAccountTokenProgram,
@@ -259,6 +272,11 @@ export async function getLiquidateInstructionAsync<
       isWritable: true,
     },
     vault: { value: input.vault ?? null, isSigner: false, isWritable: true },
+    liquidationFeed: {
+      value: input.liquidationFeed ?? null,
+      isSigner: false,
+      isWritable: true,
+    },
     tokenProgram: {
       value: input.tokenProgram ?? null,
       isSigner: false,
@@ -273,6 +291,11 @@ export async function getLiquidateInstructionAsync<
   // Resolve default values.
   if (!accounts.exchange.value) {
     accounts.exchange.value = await findExchangePda({ programAddress });
+  }
+  if (!accounts.liquidationFeed.value) {
+    accounts.liquidationFeed.value = await findLiquidationFeedPda({
+      programAddress,
+    });
   }
   if (!accounts.tokenProgram.value) {
     accounts.tokenProgram.value =
@@ -289,6 +312,7 @@ export async function getLiquidateInstructionAsync<
       getAccountMeta("ownerCollateral", accounts.ownerCollateral),
       getAccountMeta("liquidatorCollateral", accounts.liquidatorCollateral),
       getAccountMeta("vault", accounts.vault),
+      getAccountMeta("liquidationFeed", accounts.liquidationFeed),
       getAccountMeta("tokenProgram", accounts.tokenProgram),
     ],
     data: getLiquidateInstructionDataEncoder().encode({}),
@@ -328,6 +352,10 @@ export async function getLiquidateInstructionAsync<
       InstructionAccountInputAddress<TAccountVault>
     >,
     ResolvedInstructionAccountMeta<
+      TAccountLiquidationFeed,
+      InstructionAccountInputAddress<TAccountLiquidationFeed>
+    >,
+    ResolvedInstructionAccountMeta<
       TAccountTokenProgram,
       InstructionAccountInputAddress<TAccountTokenProgram>
     >
@@ -345,6 +373,8 @@ export type LiquidateInput<
   TAccountLiquidatorCollateral extends InstructionAccountInput =
     InstructionAccountInput,
   TAccountVault extends InstructionAccountInput = InstructionAccountInput,
+  TAccountLiquidationFeed extends InstructionAccountInput =
+    InstructionAccountInput,
   TAccountTokenProgram extends InstructionAccountInput =
     InstructionAccountInput,
 > = {
@@ -356,6 +386,7 @@ export type LiquidateInput<
   ownerCollateral: TAccountOwnerCollateral;
   liquidatorCollateral: TAccountLiquidatorCollateral;
   vault: TAccountVault;
+  liquidationFeed: TAccountLiquidationFeed;
   tokenProgram?: TAccountTokenProgram;
 };
 
@@ -368,6 +399,7 @@ export function getLiquidateInstruction<
   TAccountOwnerCollateral extends InstructionAccountInput,
   TAccountLiquidatorCollateral extends InstructionAccountInput,
   TAccountVault extends InstructionAccountInput,
+  TAccountLiquidationFeed extends InstructionAccountInput,
   TAccountTokenProgram extends InstructionAccountInput,
   TProgramAddress extends Address = typeof MY_DEFI_DAPP_PROGRAM_ADDRESS,
 >(
@@ -380,6 +412,7 @@ export function getLiquidateInstruction<
     TAccountOwnerCollateral,
     TAccountLiquidatorCollateral,
     TAccountVault,
+    TAccountLiquidationFeed,
     TAccountTokenProgram
   >,
   config?: {
@@ -418,6 +451,10 @@ export function getLiquidateInstruction<
   ResolvedInstructionAccountMeta<
     TAccountVault,
     InstructionAccountInputAddress<TAccountVault>
+  >,
+  ResolvedInstructionAccountMeta<
+    TAccountLiquidationFeed,
+    InstructionAccountInputAddress<TAccountLiquidationFeed>
   >,
   ResolvedInstructionAccountMeta<
     TAccountTokenProgram,
@@ -465,6 +502,11 @@ export function getLiquidateInstruction<
       isWritable: true,
     },
     vault: { value: input.vault ?? null, isSigner: false, isWritable: true },
+    liquidationFeed: {
+      value: input.liquidationFeed ?? null,
+      isSigner: false,
+      isWritable: true,
+    },
     tokenProgram: {
       value: input.tokenProgram ?? null,
       isSigner: false,
@@ -492,6 +534,7 @@ export function getLiquidateInstruction<
       getAccountMeta("ownerCollateral", accounts.ownerCollateral),
       getAccountMeta("liquidatorCollateral", accounts.liquidatorCollateral),
       getAccountMeta("vault", accounts.vault),
+      getAccountMeta("liquidationFeed", accounts.liquidationFeed),
       getAccountMeta("tokenProgram", accounts.tokenProgram),
     ],
     data: getLiquidateInstructionDataEncoder().encode({}),
@@ -531,6 +574,10 @@ export function getLiquidateInstruction<
       InstructionAccountInputAddress<TAccountVault>
     >,
     ResolvedInstructionAccountMeta<
+      TAccountLiquidationFeed,
+      InstructionAccountInputAddress<TAccountLiquidationFeed>
+    >,
+    ResolvedInstructionAccountMeta<
       TAccountTokenProgram,
       InstructionAccountInputAddress<TAccountTokenProgram>
     >
@@ -551,7 +598,8 @@ export type ParsedLiquidateInstruction<
     ownerCollateral: TAccountMetas[5];
     liquidatorCollateral: TAccountMetas[6];
     vault: TAccountMetas[7];
-    tokenProgram: TAccountMetas[8];
+    liquidationFeed: TAccountMetas[8];
+    tokenProgram: TAccountMetas[9];
   };
   data: LiquidateInstructionData;
 };
@@ -564,12 +612,12 @@ export function parseLiquidateInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedLiquidateInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 9) {
+  if (instruction.accounts.length < 10) {
     throw new SolanaError(
       SOLANA_ERROR__PROGRAM_CLIENTS__INSUFFICIENT_ACCOUNT_METAS,
       {
         actualAccountMetas: instruction.accounts.length,
-        expectedAccountMetas: 9,
+        expectedAccountMetas: 10,
       },
     );
   }
@@ -590,6 +638,7 @@ export function parseLiquidateInstruction<
       ownerCollateral: getNextAccount(),
       liquidatorCollateral: getNextAccount(),
       vault: getNextAccount(),
+      liquidationFeed: getNextAccount(),
       tokenProgram: getNextAccount(),
     },
     data: getLiquidateInstructionDataDecoder().decode(instruction.data),

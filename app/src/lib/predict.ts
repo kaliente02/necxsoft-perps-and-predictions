@@ -298,7 +298,8 @@ export async function redeemIxs(state: PerpsState, owner: TransactionSigner, mar
 
 export async function createPredictionIx(args: {
   state: PerpsState;
-  admin: TransactionSigner;
+  /** The admin, or for a price market its oracle market's oracle authority. */
+  creator: TransactionSigner;
   id: bigint;
   question: string;
   /** Perps market for a price market; omit for a custom question. */
@@ -309,16 +310,16 @@ export async function createPredictionIx(args: {
   initialYesBps: number;
   feeBps: number;
 }): Promise<Instruction> {
-  const { state, admin } = args;
+  const { state, creator } = args;
   const prediction = await predictionPda(args.id);
   return getCreatePredictionInstruction({
-    admin,
+    creator,
     exchange: state.exchangeAddress,
     oracleMarket: args.oracleMarket,
     prediction,
     collateralMint: state.exchange.collateralMint,
     vault: await predictionVaultPda(prediction),
-    adminCollateral: await ata(admin.address, state.exchange.collateralMint),
+    creatorCollateral: await ata(creator.address, state.exchange.collateralMint),
     id: args.id,
     question: args.question,
     strike: args.strike,
@@ -358,8 +359,8 @@ export type ProbabilityPoint = { t: number; yesBps: number };
 const SHARES_TRADED = '222,217,188,250,98,184,148,163';
 const tradeCache = new Map<string, ProbabilityPoint[]>();
 
-/** YES probability after each trade on `market`, oldest first. */
-export async function loadProbabilityHistory(rpc: Rpc<SolanaRpcApi>, market: Address, limit = 60): Promise<ProbabilityPoint[]> {
+/** YES probability after each of the last `limit` transactions on `market`, oldest first. */
+export async function loadProbabilityHistory(rpc: Rpc<SolanaRpcApi>, market: Address, limit = 200): Promise<ProbabilityPoint[]> {
   const signatures = await rpc.getSignaturesForAddress(market, { limit, commitment: 'confirmed' }).send();
   const ok = signatures.filter((s) => s.err === null);
   const missing = ok.filter((s) => !tradeCache.has(s.signature));
@@ -401,4 +402,76 @@ export function priceQuestion(symbol: string, strike: bigint, closeTime: bigint)
   });
   const strikeText = (Number(strike) / Number(USD)).toLocaleString('en-US', { maximumFractionDigits: 2 });
   return `Will ${asset} be at or above $${strikeText} on ${when} UTC?`;
+}
+
+// ---------- a wallet's settled prediction results, from SharesTraded / PredictionRedeemed events ----------
+
+const PREDICTION_REDEEMED = '126,25,197,178,229,159,6,188';
+
+export type PredictionResult = {
+  market: Address;
+  /** USDC spent buying shares, fees included. */
+  paid: bigint;
+  /** USDC received from selling shares before close. */
+  sold: bigint;
+  /** USDC received when redeeming after resolution (null if not redeemed yet). */
+  redeemed: bigint | null;
+  trades: number;
+  /** Time of the latest event. */
+  time: number;
+};
+
+type ResultEvent = { market: Address; paid: bigint; sold: bigint; redeemed: bigint | null };
+const resultCache = new Map<string, ResultEvent[]>();
+
+/** Per-market totals of the owner's prediction trades and redemptions in their last `limit` transactions. */
+export async function loadPredictionResults(rpc: Rpc<SolanaRpcApi>, owner: Address, limit = 100): Promise<PredictionResult[]> {
+  const signatures = await rpc.getSignaturesForAddress(owner, { limit, commitment: 'confirmed' }).send();
+  const ok = signatures.filter((s) => s.err === null);
+  const missing = ok.filter((s) => !resultCache.has(s.signature));
+  const addressDecoder = getAddressDecoder();
+  for (let i = 0; i < missing.length; i += 5) {
+    await Promise.all(
+      missing.slice(i, i + 5).map(async (s) => {
+        const tx = await rpc
+          .getTransaction(s.signature, { encoding: 'base64', maxSupportedTransactionVersion: 1, commitment: 'confirmed' })
+          .send();
+        if (!tx) return;
+        const events: ResultEvent[] = [];
+        for (const line of tx.meta?.logMessages ?? []) {
+          if (!line.startsWith('Program data: ')) continue;
+          const bytes = getBase64Encoder().encode(line.slice(14)) as Uint8Array;
+          const name = Array.from(bytes.subarray(0, 8)).join(',');
+          if (name !== SHARES_TRADED && name !== PREDICTION_REDEEMED) continue;
+          // Both events start with market, then owner.
+          if (addressDecoder.decode(bytes.subarray(40, 72)) !== owner) continue;
+          const market = addressDecoder.decode(bytes.subarray(8, 40));
+          const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+          if (name === PREDICTION_REDEEMED) {
+            events.push({ market, paid: 0n, sold: 0n, redeemed: view.getBigUint64(72, true) });
+          } else {
+            // outcome u8, buy bool, shares u64, amount u64
+            const buy = bytes[73] === 1;
+            const amount = view.getBigUint64(82, true);
+            events.push({ market, paid: buy ? amount : 0n, sold: buy ? 0n : amount, redeemed: null });
+          }
+        }
+        resultCache.set(s.signature, events);
+      }),
+    );
+  }
+  const results = new Map<Address, PredictionResult>();
+  // Oldest first, so `time` ends at the latest event.
+  for (const s of [...ok].reverse()) {
+    for (const e of resultCache.get(s.signature) ?? []) {
+      const r = results.get(e.market) ?? { market: e.market, paid: 0n, sold: 0n, redeemed: null, trades: 0, time: 0 };
+      r.paid += e.paid;
+      r.sold += e.sold;
+      if (e.redeemed !== null) r.redeemed = (r.redeemed ?? 0n) + e.redeemed;
+      else r.trades++;
+      r.time = Number(s.blockTime ?? 0);
+      results.set(e.market, r);
+    }
+  }
+  return [...results.values()].sort((a, b) => b.time - a.time);
 }

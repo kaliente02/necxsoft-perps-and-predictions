@@ -1,6 +1,7 @@
 // Cloudflare Worker behind necxsoft.com/perps-and-predictions/*:
 //  - serves the built web app (static assets)
-//  - runs the keeper on a one-minute cron, ticking every TICK_MS within each run
+//  - runs the keeper on a one-minute cron, ticking every TICK_MS within each run; as the markets'
+//    oracle authority it also opens the rolling price prediction markets, seeded from its USDC
 //  - POST /perps-and-predictions/api/faucet {wallet}: devnet test USDC (+ a little SOL for fees)
 //
 // Secrets:  KEEPER_SECRET_KEY  (JSON byte array of the keeper keypair; wrangler secret put)
@@ -38,6 +39,8 @@ const TICK_MS = 30_000;
  * allows 50 per invocation, so more ticks per run fail with "Too many subrequests".
  */
 const TICKS_PER_RUN = 2;
+const ROLL_HOURS = 4;
+const ROLL_LIQUIDITY = 2_000n * USD;
 const FAUCET_USDC = 1_000n * USD;
 const FAUCET_SOL = 50_000_000n; // 0.05 SOL, for fees and account rent
 const SOL_TOP_UP_BELOW = 20_000_000n;
@@ -57,12 +60,12 @@ async function keeperClient(env: Env) {
 
 async function runKeeper(env: Env) {
   const client = await keeperClient(env);
-  // The hosted keeper holds no admin or mint authority, so it doesn't open rolling markets.
-  const keeper = createKeeper(client, { rollHours: 0, rollLiquidity: 0n });
+  const keeper = createKeeper(client, { rollHours: ROLL_HOURS, rollLiquidity: ROLL_LIQUIDITY, mintLiquidity: false });
   for (let i = 0; i < TICKS_PER_RUN; i++) {
     const started = Date.now();
     try {
-      await keeper.tick();
+      // Prediction markets only need minute resolution, so only the last tick handles them.
+      await keeper.tick({ predictions: i === TICKS_PER_RUN - 1 });
     } catch (e) {
       console.error('tick failed:', (e as Error).message);
     }

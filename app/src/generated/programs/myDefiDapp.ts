@@ -36,15 +36,21 @@ import {
 } from "@solana/program-client-core";
 import {
   getExchangeCodec,
+  getLiquidationFeedCodec,
   getMarketCodec,
+  getMarketHistoryCodec,
   getOrderCodec,
   getPositionCodec,
   getPredictionMarketCodec,
   getPredictionPositionCodec,
   type Exchange,
   type ExchangeArgs,
+  type LiquidationFeed,
+  type LiquidationFeedArgs,
   type Market,
   type MarketArgs,
+  type MarketHistory,
+  type MarketHistoryArgs,
   type Order,
   type OrderArgs,
   type Position,
@@ -60,6 +66,7 @@ import {
   getBuySharesInstructionAsync,
   getCancelOrderInstructionAsync,
   getClosePositionInstructionAsync,
+  getConfigureMarketInstructionAsync,
   getCreatePredictionInstructionAsync,
   getDecreasePositionInstructionAsync,
   getExecuteLimitOrderInstructionAsync,
@@ -75,13 +82,14 @@ import {
   getSellSharesInstructionAsync,
   getUpdateExchangeInstructionAsync,
   getUpdateMarketInstructionAsync,
-  getUpdatePriceInstruction,
+  getUpdatePriceInstructionAsync,
   getWithdrawPredictionLiquidityInstructionAsync,
   parseAddLiquidityInstruction,
   parseAddMarketInstruction,
   parseBuySharesInstruction,
   parseCancelOrderInstruction,
   parseClosePositionInstruction,
+  parseConfigureMarketInstruction,
   parseCreatePredictionInstruction,
   parseDecreasePositionInstruction,
   parseExecuteLimitOrderInstruction,
@@ -104,6 +112,7 @@ import {
   type BuySharesAsyncInput,
   type CancelOrderAsyncInput,
   type ClosePositionAsyncInput,
+  type ConfigureMarketAsyncInput,
   type CreatePredictionAsyncInput,
   type DecreasePositionAsyncInput,
   type ExecuteLimitOrderAsyncInput,
@@ -116,6 +125,7 @@ import {
   type ParsedBuySharesInstruction,
   type ParsedCancelOrderInstruction,
   type ParsedClosePositionInstruction,
+  type ParsedConfigureMarketInstruction,
   type ParsedCreatePredictionInstruction,
   type ParsedDecreasePositionInstruction,
   type ParsedExecuteLimitOrderInstruction,
@@ -141,12 +151,14 @@ import {
   type SellSharesAsyncInput,
   type UpdateExchangeAsyncInput,
   type UpdateMarketAsyncInput,
-  type UpdatePriceInput,
+  type UpdatePriceAsyncInput,
   type WithdrawPredictionLiquidityAsyncInput,
 } from "../instructions";
 import {
   findExchangePda,
+  findHistoryPda,
   findInitializeVaultPda,
+  findLiquidationFeedPda,
   findLpMintPda,
   findOrderPda,
   findPositionPda,
@@ -160,17 +172,21 @@ export const MY_DEFI_DAPP_PROGRAM_ADDRESS =
 
 export const MyDefiDappAccount = {
   0: "Exchange",
-  1: "Market",
-  2: "Order",
-  3: "Position",
-  4: "PredictionMarket",
-  5: "PredictionPosition",
+  1: "LiquidationFeed",
+  2: "Market",
+  3: "MarketHistory",
+  4: "Order",
+  5: "Position",
+  6: "PredictionMarket",
+  7: "PredictionPosition",
   Exchange: 0,
-  Market: 1,
-  Order: 2,
-  Position: 3,
-  PredictionMarket: 4,
-  PredictionPosition: 5,
+  LiquidationFeed: 1,
+  Market: 2,
+  MarketHistory: 3,
+  Order: 4,
+  Position: 5,
+  PredictionMarket: 6,
+  PredictionPosition: 7,
 } as const;
 
 export type MyDefiDappAccount = (typeof MyDefiDappAccount)[Exclude<
@@ -197,12 +213,34 @@ export function identifyMyDefiDappAccount(
     containsBytes(
       data,
       fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([175, 203, 248, 197, 176, 17, 42, 240]),
+      ),
+      0,
+    )
+  ) {
+    return MyDefiDappAccount.LiquidationFeed;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
         new Uint8Array([219, 190, 213, 55, 0, 227, 198, 154]),
       ),
       0,
     )
   ) {
     return MyDefiDappAccount.Market;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([124, 69, 59, 69, 194, 71, 30, 106]),
+      ),
+      0,
+    )
+  ) {
+    return MyDefiDappAccount.MarketHistory;
   }
   if (
     containsBytes(
@@ -433,45 +471,47 @@ export const MyDefiDappInstruction = {
   2: "BuyShares",
   3: "CancelOrder",
   4: "ClosePosition",
-  5: "CreatePrediction",
-  6: "DecreasePosition",
-  7: "ExecuteLimitOrder",
-  8: "ExecuteTriggerOrder",
-  9: "IncreasePosition",
-  10: "Initialize",
-  11: "Liquidate",
-  12: "PlaceOrder",
-  13: "RedeemShares",
-  14: "RemoveLiquidity",
-  15: "ResolvePrediction",
-  16: "ResolvePriceMarket",
-  17: "SellShares",
-  18: "UpdateExchange",
-  19: "UpdateMarket",
-  20: "UpdatePrice",
-  21: "WithdrawPredictionLiquidity",
+  5: "ConfigureMarket",
+  6: "CreatePrediction",
+  7: "DecreasePosition",
+  8: "ExecuteLimitOrder",
+  9: "ExecuteTriggerOrder",
+  10: "IncreasePosition",
+  11: "Initialize",
+  12: "Liquidate",
+  13: "PlaceOrder",
+  14: "RedeemShares",
+  15: "RemoveLiquidity",
+  16: "ResolvePrediction",
+  17: "ResolvePriceMarket",
+  18: "SellShares",
+  19: "UpdateExchange",
+  20: "UpdateMarket",
+  21: "UpdatePrice",
+  22: "WithdrawPredictionLiquidity",
   AddLiquidity: 0,
   AddMarket: 1,
   BuyShares: 2,
   CancelOrder: 3,
   ClosePosition: 4,
-  CreatePrediction: 5,
-  DecreasePosition: 6,
-  ExecuteLimitOrder: 7,
-  ExecuteTriggerOrder: 8,
-  IncreasePosition: 9,
-  Initialize: 10,
-  Liquidate: 11,
-  PlaceOrder: 12,
-  RedeemShares: 13,
-  RemoveLiquidity: 14,
-  ResolvePrediction: 15,
-  ResolvePriceMarket: 16,
-  SellShares: 17,
-  UpdateExchange: 18,
-  UpdateMarket: 19,
-  UpdatePrice: 20,
-  WithdrawPredictionLiquidity: 21,
+  ConfigureMarket: 5,
+  CreatePrediction: 6,
+  DecreasePosition: 7,
+  ExecuteLimitOrder: 8,
+  ExecuteTriggerOrder: 9,
+  IncreasePosition: 10,
+  Initialize: 11,
+  Liquidate: 12,
+  PlaceOrder: 13,
+  RedeemShares: 14,
+  RemoveLiquidity: 15,
+  ResolvePrediction: 16,
+  ResolvePriceMarket: 17,
+  SellShares: 18,
+  UpdateExchange: 19,
+  UpdateMarket: 20,
+  UpdatePrice: 21,
+  WithdrawPredictionLiquidity: 22,
 } as const;
 
 export type MyDefiDappInstruction = (typeof MyDefiDappInstruction)[Exclude<
@@ -537,6 +577,17 @@ export function identifyMyDefiDappInstruction(
     )
   ) {
     return MyDefiDappInstruction.ClosePosition;
+  }
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([235, 252, 189, 200, 118, 201, 5, 252]),
+      ),
+      0,
+    )
+  ) {
+    return MyDefiDappInstruction.ConfigureMarket;
   }
   if (
     containsBytes(
@@ -750,6 +801,9 @@ export type ParsedMyDefiDappInstruction<
       instructionType: typeof MyDefiDappInstruction.ClosePosition;
     } & ParsedClosePositionInstruction<TProgram>)
   | ({
+      instructionType: typeof MyDefiDappInstruction.ConfigureMarket;
+    } & ParsedConfigureMarketInstruction<TProgram>)
+  | ({
       instructionType: typeof MyDefiDappInstruction.CreatePrediction;
     } & ParsedCreatePredictionInstruction<TProgram>)
   | ({
@@ -839,6 +893,13 @@ export function parseMyDefiDappInstruction<TProgram extends string>(
       return {
         instructionType: MyDefiDappInstruction.ClosePosition,
         ...parseClosePositionInstruction(instruction),
+      };
+    }
+    case MyDefiDappInstruction.ConfigureMarket: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: MyDefiDappInstruction.ConfigureMarket,
+        ...parseConfigureMarketInstruction(instruction),
       };
     }
     case MyDefiDappInstruction.CreatePrediction: {
@@ -983,8 +1044,12 @@ export type MyDefiDappPlugin = {
 export type MyDefiDappPluginAccounts = {
   exchange: ReturnType<typeof getExchangeCodec> &
     SelfFetchFunctions<ExchangeArgs, Exchange>;
+  liquidationFeed: ReturnType<typeof getLiquidationFeedCodec> &
+    SelfFetchFunctions<LiquidationFeedArgs, LiquidationFeed>;
   market: ReturnType<typeof getMarketCodec> &
     SelfFetchFunctions<MarketArgs, Market>;
+  marketHistory: ReturnType<typeof getMarketHistoryCodec> &
+    SelfFetchFunctions<MarketHistoryArgs, MarketHistory>;
   order: ReturnType<typeof getOrderCodec> &
     SelfFetchFunctions<OrderArgs, Order>;
   position: ReturnType<typeof getPositionCodec> &
@@ -1020,6 +1085,11 @@ export type MyDefiDappPluginInstructions = {
     input: ClosePositionAsyncInput,
     config?: { programAddress?: Address | HasAddress },
   ) => ReturnType<typeof getClosePositionInstructionAsync> &
+    SelfPlanAndSendFunctions;
+  configureMarket: (
+    input: ConfigureMarketAsyncInput,
+    config?: { programAddress?: Address | HasAddress },
+  ) => ReturnType<typeof getConfigureMarketInstructionAsync> &
     SelfPlanAndSendFunctions;
   createPrediction: (
     input: CreatePredictionAsyncInput,
@@ -1097,9 +1167,10 @@ export type MyDefiDappPluginInstructions = {
   ) => ReturnType<typeof getUpdateMarketInstructionAsync> &
     SelfPlanAndSendFunctions;
   updatePrice: (
-    input: UpdatePriceInput,
+    input: UpdatePriceAsyncInput,
     config?: { programAddress?: Address | HasAddress },
-  ) => ReturnType<typeof getUpdatePriceInstruction> & SelfPlanAndSendFunctions;
+  ) => ReturnType<typeof getUpdatePriceInstructionAsync> &
+    SelfPlanAndSendFunctions;
   withdrawPredictionLiquidity: (
     input: WithdrawPredictionLiquidityAsyncInput,
     config?: { programAddress?: Address | HasAddress },
@@ -1111,6 +1182,8 @@ export type MyDefiDappPluginPdas = {
   exchange: typeof findExchangePda;
   vault: typeof findVaultPda;
   position: typeof findPositionPda;
+  history: typeof findHistoryPda;
+  liquidationFeed: typeof findLiquidationFeedPda;
   prediction: typeof findPredictionPda;
   initializeVault: typeof findInitializeVaultPda;
   lpMint: typeof findLpMintPda;
@@ -1134,7 +1207,12 @@ export function myDefiDappProgram(
       myDefiDapp: {
         accounts: {
           exchange: addSelfFetchFunctions(client, getExchangeCodec()),
+          liquidationFeed: addSelfFetchFunctions(
+            client,
+            getLiquidationFeedCodec(),
+          ),
           market: addSelfFetchFunctions(client, getMarketCodec()),
+          marketHistory: addSelfFetchFunctions(client, getMarketHistoryCodec()),
           order: addSelfFetchFunctions(client, getOrderCodec()),
           position: addSelfFetchFunctions(client, getPositionCodec()),
           predictionMarket: addSelfFetchFunctions(
@@ -1183,6 +1261,14 @@ export function myDefiDappProgram(
             addSelfPlanAndSendFunctions(
               client,
               getClosePositionInstructionAsync(input, {
+                programAddress:
+                  instructionConfig?.programAddress ?? config.programAddress,
+              }),
+            ),
+          configureMarket: (input, instructionConfig) =>
+            addSelfPlanAndSendFunctions(
+              client,
+              getConfigureMarketInstructionAsync(input, {
                 programAddress:
                   instructionConfig?.programAddress ?? config.programAddress,
               }),
@@ -1310,7 +1396,7 @@ export function myDefiDappProgram(
           updatePrice: (input, instructionConfig) =>
             addSelfPlanAndSendFunctions(
               client,
-              getUpdatePriceInstruction(input, {
+              getUpdatePriceInstructionAsync(input, {
                 programAddress:
                   instructionConfig?.programAddress ?? config.programAddress,
               }),
@@ -1337,6 +1423,16 @@ export function myDefiDappProgram(
             }),
           position: (seeds, pdaConfig) =>
             findPositionPda(seeds, {
+              programAddress:
+                pdaConfig?.programAddress ?? config.programAddress,
+            }),
+          history: (seeds, pdaConfig) =>
+            findHistoryPda(seeds, {
+              programAddress:
+                pdaConfig?.programAddress ?? config.programAddress,
+            }),
+          liquidationFeed: (pdaConfig) =>
+            findLiquidationFeedPda({
               programAddress:
                 pdaConfig?.programAddress ?? config.programAddress,
             }),

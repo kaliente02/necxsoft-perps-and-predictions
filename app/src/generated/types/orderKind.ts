@@ -19,9 +19,11 @@ export const OrderKind = {
   0: "Limit",
   1: "TakeProfit",
   2: "StopLoss",
+  3: "StopEntry",
   Limit: 0,
   TakeProfit: 1,
   StopLoss: 2,
+  StopEntry: 3,
 } as const;
 
 export type OrderKind = (typeof OrderKind)[Exclude<

@@ -54,20 +54,23 @@ fn transfer_to_prediction<'info>(
 #[derive(Accounts)]
 #[instruction(id: u64)]
 pub struct CreatePrediction<'info> {
-    #[account(mut)]
-    pub admin: Signer<'info>,
+    /// The exchange admin, or for a price market also its oracle market's oracle authority (the
+    /// keeper), which already decides the settlement price and so needs no extra trust.
     #[account(
-        seeds = [EXCHANGE_SEED],
-        bump = exchange.bump,
-        has_one = admin @ ErrorCode::Unauthorized,
+        mut,
+        constraint = creator.key() == exchange.admin
+            || oracle_market.as_ref().is_some_and(|m| m.oracle_authority == creator.key())
+            @ ErrorCode::Unauthorized,
     )]
+    pub creator: Signer<'info>,
+    #[account(seeds = [EXCHANGE_SEED], bump = exchange.bump)]
     pub exchange: Box<Account<'info, Exchange>>,
     /// The perps market that settles a price market; omit for a custom question.
     #[account(has_one = exchange)]
     pub oracle_market: Option<Box<Account<'info, Market>>>,
     #[account(
         init,
-        payer = admin,
+        payer = creator,
         space = 8 + PredictionMarket::INIT_SPACE,
         seeds = [PREDICTION_SEED, &id.to_le_bytes()],
         bump
@@ -77,7 +80,7 @@ pub struct CreatePrediction<'info> {
     pub collateral_mint: Box<Account<'info, Mint>>,
     #[account(
         init,
-        payer = admin,
+        payer = creator,
         seeds = [PREDICTION_VAULT_SEED, prediction.key().as_ref()],
         bump,
         token::mint = collateral_mint,
@@ -87,9 +90,9 @@ pub struct CreatePrediction<'info> {
     #[account(
         mut,
         token::mint = exchange.collateral_mint,
-        token::authority = admin,
+        token::authority = creator,
     )]
-    pub admin_collateral: Box<Account<'info, TokenAccount>>,
+    pub creator_collateral: Box<Account<'info, TokenAccount>>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
@@ -138,15 +141,15 @@ pub fn handle_create_prediction(
 
     transfer_to_prediction(
         &ctx.accounts.token_program,
-        &ctx.accounts.admin_collateral,
+        &ctx.accounts.creator_collateral,
         &ctx.accounts.vault,
-        &ctx.accounts.admin,
+        &ctx.accounts.creator,
         liquidity,
     )?;
 
     ctx.accounts.prediction.set_inner(PredictionMarket {
         exchange: ctx.accounts.exchange.key(),
-        creator: ctx.accounts.admin.key(),
+        creator: ctx.accounts.creator.key(),
         id,
         question: question.clone(),
         oracle_market,

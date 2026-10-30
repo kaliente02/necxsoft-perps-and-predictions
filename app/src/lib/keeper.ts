@@ -5,7 +5,8 @@
 //  4. resolves expired price prediction markets from the oracle, and withdraws the liquidity of
 //     resolved markets it created
 //  5. keeps one rolling "above the strike?" price market open per perps market, each running
-//     ROLL_HOURS (default 4; ROLL_HOURS=0 disables), seeded with ROLL_LIQUIDITY USDC (default 2,000)
+//     ROLL_HOURS (default 4; ROLL_HOURS=0 disables), seeded with ROLL_LIQUIDITY USDC (default 2,000).
+//     The admin or a market's oracle authority may open them, so the hosted keeper does this too.
 //
 //   npm run keeper            (scripts/keeper.ts, locally)
 //   worker/index.ts           (Cloudflare cron, hosted)
@@ -23,6 +24,8 @@ import {
 import {
   POSITION_DISCRIMINATOR,
   fetchMaybePosition,
+  findHistoryPda,
+  findLiquidationFeedPda,
   getExecuteLimitOrderInstruction,
   getExecuteTriggerOrderInstruction,
   getLiquidateInstruction,
@@ -30,7 +33,6 @@ import {
   getUpdatePriceInstruction,
 } from '../generated';
 import {
-  OrderKind,
   type OrderInfo,
   type PerpsState,
   PROGRAM_ADDRESS,
@@ -39,8 +41,10 @@ import {
   formatUsd,
   loadOrders,
   loadPerpsState,
+  opensPosition,
   orderKindLabel,
   positionPda,
+  tokenBalance,
   valuePosition,
 } from './perps';
 import {
@@ -61,10 +65,15 @@ export type KeeperClient = {
 };
 
 export type KeeperOptions = {
-  /** Hours each rolling price market runs; 0 disables them (they also need the admin key). */
+  /**
+   * Hours each rolling price market runs; 0 disables them. Opening one needs the admin key or the
+   * perps market's oracle authority key.
+   */
   rollHours: number;
-  /** USDC (6 decimals) minted to seed each rolling market; needs the USDC mint authority. */
+  /** USDC (6 decimals) that seeds each rolling market. */
   rollLiquidity: bigint;
+  /** Mint the seed USDC (needs the mint authority) instead of paying it from the keeper's balance. */
+  mintLiquidity: boolean;
   log?: (...args: unknown[]) => void;
 };
 
@@ -75,17 +84,25 @@ export function createKeeper(client: KeeperClient, opts: KeeperOptions) {
   const ROLL_LIQUIDITY = opts.rollLiquidity;
   const console = { log: opts.log ?? globalThis.console.log, warn: opts.log ?? globalThis.console.warn };
 
-  async function tick() {
+  /** `predictions: false` skips resolving and opening prediction markets, to save RPC requests. */
+  async function tick({ predictions: withPredictions = true } = {}) {
     const state = await loadPerpsState(client.rpc);
     if (!state) throw new Error('Exchange not initialized; run `npm run setup -- init` first');
 
     // 1. Prices
     const prices = await fetchPrices(state.markets.map((m) => m.symbol));
-    const updates = state.markets
-      .filter((m) => prices[m.symbol] && m.data.oracleAuthority === client.payer.address)
-      .map((m) =>
-        getUpdatePriceInstruction({ oracleAuthority: client.payer, market: m.address, price: prices[m.symbol] }),
-      );
+    const updates = await Promise.all(
+      state.markets
+        .filter((m) => prices[m.symbol] && m.data.oracleAuthority === client.payer.address)
+        .map(async (m) =>
+          getUpdatePriceInstruction({
+            oracleAuthority: client.payer,
+            market: m.address,
+            history: (await findHistoryPda({ market: m.address }))[0],
+            price: prices[m.symbol],
+          }),
+        ),
+    );
     if (updates.length) {
       await client.sendTransaction(updates);
       console.log(
@@ -135,7 +152,7 @@ export function createKeeper(client: KeeperClient, opts: KeeperOptions) {
     }
 
     // 4 + 5. Prediction markets
-    await predictions(fresh, now);
+    if (withPredictions) await predictions(fresh, now);
   }
 
   async function predictions(state: PerpsState, now: bigint) {
@@ -164,34 +181,41 @@ export function createKeeper(client: KeeperClient, opts: KeeperOptions) {
       }
     }
 
-    if (ROLL_HOURS <= 0 || state.exchange.admin !== client.payer.address) return;
+    if (ROLL_HOURS <= 0) return;
+    const mint = state.exchange.collateralMint;
+    let balance = opts.mintLiquidity ? 0n : await tokenBalance(client.rpc, client.payer.address, mint);
     for (const perp of state.markets) {
-      const open = markets.some(
-        (m) => !m.data.resolved && m.data.oracleMarket === perp.address && m.data.creator === client.payer.address && m.data.closeTime > now,
-      );
-      if (open || now - perp.data.priceUpdatedAt > 60n) continue;
+      const mayCreate = state.exchange.admin === client.payer.address || perp.data.oracleAuthority === client.payer.address;
+      // Any open price market on this perp counts, so a second keeper doesn't open a duplicate.
+      const open = markets.some((m) => !m.data.resolved && m.data.oracleMarket === perp.address && m.data.closeTime > now);
+      if (!mayCreate || open || now - perp.data.priceUpdatedAt > 60n) continue;
+      if (!opts.mintLiquidity && balance < ROLL_LIQUIDITY) {
+        console.warn(`  not enough USDC to open a rolling ${perp.symbol} market (${formatUsd(balance)})`);
+        continue;
+      }
       const price = Number(perp.data.price) / 1e6;
       const step = 10 ** Math.max(0, Math.floor(Math.log10(price)) - 2);
       const strike = BigInt(Math.round(Math.round(price / step) * step * 1e6));
       // Close on a whole hour, at least ROLL_HOURS from now.
       const closeTime = (now / 3600n + BigInt(Math.ceil(ROLL_HOURS))) * 3600n;
-      const mint = state.exchange.collateralMint;
       try {
         const id = BigInt(Date.now()) * 1000n + BigInt(perp.data.index);
-        await client.sendTransaction(
-          await getMintToATAInstructionPlanAsync({
-            payer: client.payer,
-            owner: client.payer.address,
-            mint,
-            mintAuthority: client.payer,
-            amount: ROLL_LIQUIDITY,
-            decimals: 6,
-          }),
-        );
+        if (opts.mintLiquidity) {
+          await client.sendTransaction(
+            await getMintToATAInstructionPlanAsync({
+              payer: client.payer,
+              owner: client.payer.address,
+              mint,
+              mintAuthority: client.payer,
+              amount: ROLL_LIQUIDITY,
+              decimals: 6,
+            }),
+          );
+        }
         await client.sendTransaction([
           await createPredictionIx({
             state,
-            admin: client.payer,
+            creator: client.payer,
             id,
             question: priceQuestion(perp.symbol, strike, closeTime),
             oracleMarket: perp.address,
@@ -202,6 +226,7 @@ export function createKeeper(client: KeeperClient, opts: KeeperOptions) {
             feeBps: 100,
           }),
         ]);
+        balance -= ROLL_LIQUIDITY;
         console.log(`Opened rolling market: ${priceQuestion(perp.symbol, strike, closeTime)}`);
       } catch (e) {
         console.warn(`  rolling market for ${perp.symbol} failed: ${(e as Error).message}`);
@@ -212,7 +237,7 @@ export function createKeeper(client: KeeperClient, opts: KeeperOptions) {
   async function executeOrder(order: OrderInfo, state: PerpsState) {
     const { owner, market, side } = order.data;
     const position = await positionPda(market, owner, side);
-    if (order.data.kind === OrderKind.Limit) {
+    if (opensPosition(order.data.kind)) {
       await client.sendTransaction([
         getExecuteLimitOrderInstruction({
           executor: client.payer,
@@ -265,6 +290,7 @@ export function createKeeper(client: KeeperClient, opts: KeeperOptions) {
         ownerCollateral: await ata(owner, mint),
         liquidatorCollateral: await ata(client.payer.address, mint),
         vault: state.exchange.vault,
+        liquidationFeed: (await findLiquidationFeedPda())[0],
       }),
     ]);
   }

@@ -7,7 +7,9 @@
  */
 
 export * from "./exchange";
+export * from "./liquidationFeed";
 export * from "./market";
+export * from "./marketHistory";
 export * from "./order";
 export * from "./position";
 export * from "./predictionMarket";

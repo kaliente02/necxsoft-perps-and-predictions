@@ -18,7 +18,7 @@ import {
   sellSharesIxs,
   yesPriceBps,
 } from '../lib/predict';
-import { usePredictionPositions, usePredictions, useProbabilityHistory } from '../hooks';
+import { usePredictionPositions, usePredictionResults, usePredictions, useProbabilityHistory } from '../hooks';
 import { useTx } from '../tx';
 
 const SLIPPAGE_BPS = 100n;
@@ -166,6 +166,7 @@ export function Predict({
           </section>
 
           <MyPredictions state={state} markets={all} positions={positions} connected={!!owner} onSelect={select} />
+          <PredictionHistory owner={owner} markets={all} positions={positions} onSelect={select} />
         </div>
 
         <div className="trade-side">
@@ -352,7 +353,9 @@ function ProbabilityChart({ market }: { market: PredictionInfo }) {
       </svg>
       {hovered && (
         <div className="chart-tooltip" style={{ left: `${(x(hovered.t) / CW) * 100}%`, top: 0 }}>
-          <span className="mono">Yes {(hovered.yesBps / 100).toFixed(1)}%</span>
+          <span className="mono">
+            <span className="pos">Yes {(hovered.yesBps / 100).toFixed(1)}%</span> · <span className="neg">No {(100 - hovered.yesBps / 100).toFixed(1)}%</span>
+          </span>
           <span className="faint small">{new Date(hovered.t * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
         </div>
       )}
@@ -536,6 +539,9 @@ function PositionSummary({ market, position }: { market: PredictionInfo; positio
   );
 }
 
+/** Redeems per claim-all transaction; each adds three accounts, so this stays well under the size limit. */
+const CLAIMS_PER_TX = 6;
+
 function MyPredictions({
   state,
   markets,
@@ -555,6 +561,10 @@ function MyPredictions({
     return market ? [{ p, market, value: positionValue(market.data, p.data) }] : [];
   });
   const total = rows.reduce((sum, r) => sum + r.value - r.p.data.netCost, 0n);
+  // Resolved positions, winners first; each claim redeems the payout and closes the position (refunding its rent).
+  const claimable = rows.filter((r) => r.market.data.resolved).sort((a, b) => Number(b.value - a.value));
+  const batch = claimable.slice(0, CLAIMS_PER_TX);
+  const batchPayout = batch.reduce((sum, r) => sum + r.value, 0n);
 
   return (
     <section className="card">
@@ -562,11 +572,29 @@ function MyPredictions({
         <h2 className="card-title">
           Your predictions {rows.length > 0 && <span className="count">{rows.length}</span>}
         </h2>
-        {rows.length > 0 && (
-          <span className="faint">
-            Total PnL <span className={total >= 0n ? 'pos' : 'neg'}>{signedUsd(total)}</span>
-          </span>
-        )}
+        <div className="head-actions">
+          {rows.length > 0 && (
+            <span className="faint">
+              Total PnL <span className={total >= 0n ? 'pos' : 'neg'}>{signedUsd(total)}</span>
+            </span>
+          )}
+          {claimable.length > 1 && (
+            <button
+              className="btn btn-primary btn-small"
+              disabled={isRunning}
+              title={claimable.length > batch.length ? `Claims ${batch.length} of ${claimable.length} per transaction` : undefined}
+              onClick={() =>
+                run(`Claim ${batch.length} markets`, async (signer) => {
+                  const [first, ...rest] = await Promise.all(batch.map((r) => redeemIxs(state, signer, r.market.address)));
+                  // Every redeem starts with the same create-ATA instruction; keep one.
+                  return [...first, ...rest.map((ixs) => ixs[ixs.length - 1])];
+                })
+              }
+            >
+              {isRunning ? 'Waiting for wallet…' : `Claim all${batchPayout > 0n ? ` $${formatUsd(batchPayout)}` : ''}${claimable.length > batch.length ? ` (${batch.length} of ${claimable.length})` : ''}`}
+            </button>
+          )}
+        </div>
       </div>
       {rows.length === 0 ? (
         <div className="empty">
@@ -625,6 +653,91 @@ function MyPredictions({
         </div>
       )}
       <p className="fine left">Value uses current AMM prices; winning shares redeem for {formatUsd(USD)} USDC each after resolution.</p>
+    </section>
+  );
+}
+
+/** Settled markets the wallet traded, from its own transaction history (including redeemed positions). */
+function PredictionHistory({
+  owner,
+  markets,
+  positions,
+  onSelect,
+}: {
+  owner: Address | null;
+  markets: PredictionInfo[];
+  positions: PredictionPositionInfo[];
+  onSelect: (address: string) => void;
+}) {
+  const { data: results, isLoading } = usePredictionResults(owner);
+  if (!owner) return null;
+  // Settled = resolved and no longer held (redeemed, or sold out before close).
+  const rows = (results ?? []).flatMap((r) => {
+    const market = markets.find((m) => m.address === r.market);
+    if (!market?.data.resolved || positions.some((p) => p.data.market === r.market)) return [];
+    const returned = r.sold + (r.redeemed ?? 0n);
+    return [{ r, market, returned, pnl: returned - r.paid }];
+  });
+  const won = rows.filter((x) => x.pnl > 0n).length;
+  const net = rows.reduce((sum, x) => sum + x.pnl, 0n);
+
+  return (
+    <section className="card">
+      <div className="card-head">
+        <h2 className="card-title">
+          Settled history {rows.length > 0 && <span className="count">{rows.length}</span>}
+        </h2>
+        {rows.length > 0 && (
+          <span className="faint">
+            {won} won · {rows.length - won} lost · Net <span className={net >= 0n ? 'pos' : 'neg'}>{signedUsd(net)}</span>
+          </span>
+        )}
+      </div>
+      {rows.length === 0 ? (
+        <div className="empty">
+          <span className="faint">{isLoading ? 'Loading your history…' : 'Markets you traded show up here once they resolve and you claim.'}</span>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Market</th>
+                <th>Result</th>
+                <th className="num">Paid</th>
+                <th className="num">Returned</th>
+                <th className="num">PnL</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ r, market, returned, pnl }) => {
+                const { data } = market;
+                const settled = new Date(Number(data.resolvedAt) * 1000).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                return (
+                  <tr key={r.market}>
+                    <td>
+                      <button className="link question-link" onClick={() => onSelect(market.address)}>
+                        {data.question}
+                      </button>
+                      <span className="sub faint">
+                        Resolved {outcomeLabel(data.outcome)}
+                        {data.resolvedPrice > 0n && ` at $${formatUsd(data.resolvedPrice, priceDecimals(data.resolvedPrice))}`} · {settled}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={`badge ${pnl > 0n ? 'long' : pnl < 0n ? 'short' : ''}`}>{pnl > 0n ? 'Won' : pnl < 0n ? 'Lost' : 'Even'}</span>
+                    </td>
+                    <td className="num mono">${formatUsd(r.paid)}</td>
+                    <td className="num mono">${formatUsd(returned)}</td>
+                    <td className={`num mono ${pnl >= 0n ? 'pos' : 'neg'}`}>{signedUsd(pnl)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="fine left">From your last 100 wallet transactions. Returned is what you sold for before close plus what you redeemed.</p>
     </section>
   );
 }

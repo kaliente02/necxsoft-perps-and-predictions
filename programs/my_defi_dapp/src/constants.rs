@@ -54,3 +54,18 @@ pub const MAX_QUESTION_LEN: usize = 160;
 
 /// Hard upper bound for a prediction market's trading fee.
 pub const MAX_PREDICTION_FEE_BPS: u16 = 1_000;
+
+#[constant]
+pub const HISTORY_SEED: &[u8] = b"history";
+
+#[constant]
+pub const LIQUIDATION_FEED_SEED: &[u8] = b"liquidations";
+
+/// Hourly samples kept per market (one week).
+pub const HISTORY_LEN: usize = 168;
+
+/// Most recent liquidations kept in the exchange-wide feed.
+pub const LIQUIDATION_FEED_LEN: usize = 50;
+
+/// Hard upper bound for a market's full-skew funding rate: 1% per hour.
+pub const MAX_HOURLY_FUNDING_RATE: u64 = 10_000_000;

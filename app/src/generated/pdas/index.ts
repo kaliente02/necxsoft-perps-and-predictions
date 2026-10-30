@@ -7,7 +7,9 @@
  */
 
 export * from "./exchange";
+export * from "./history";
 export * from "./initializeVault";
+export * from "./liquidationFeed";
 export * from "./lpMint";
 export * from "./order";
 export * from "./position";

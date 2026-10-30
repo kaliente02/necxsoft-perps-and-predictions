@@ -61,6 +61,10 @@ pub mod my_defi_dapp {
         )
     }
 
+    pub fn configure_market(ctx: Context<ConfigureMarket>, max_hourly_funding_rate: u64) -> Result<()> {
+        crate::instructions::admin::handle_configure_market(ctx, max_hourly_funding_rate)
+    }
+
     pub fn update_price(ctx: Context<UpdatePrice>, price: u64) -> Result<()> {
         crate::instructions::update_price::handle_update_price(ctx, price)
     }

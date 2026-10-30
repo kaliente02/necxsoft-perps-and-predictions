@@ -9,6 +9,8 @@ const client = await createScriptClient();
 const keeper = createKeeper(client, {
   rollHours: Number(process.env.ROLL_HOURS ?? 4),
   rollLiquidity: BigInt(process.env.ROLL_LIQUIDITY ?? 2_000) * 1_000_000n,
+  // The admin key is also the USDC mint authority; any other key pays from its balance.
+  mintLiquidity: process.env.MINT_LIQUIDITY !== '0',
 });
 
 console.log(`Keeper running as ${client.payer.address} every ${INTERVAL_MS}ms`);

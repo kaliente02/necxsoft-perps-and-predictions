@@ -67,13 +67,13 @@ export function getCreatePredictionDiscriminatorBytes(): ReadonlyUint8Array {
 
 export type CreatePredictionInstruction<
   TProgram extends string = typeof MY_DEFI_DAPP_PROGRAM_ADDRESS,
-  TAccountAdmin extends string | AccountMeta<string> = string,
+  TAccountCreator extends string | AccountMeta<string> = string,
   TAccountExchange extends string | AccountMeta<string> = string,
   TAccountOracleMarket extends string | AccountMeta<string> = string,
   TAccountPrediction extends string | AccountMeta<string> = string,
   TAccountCollateralMint extends string | AccountMeta<string> = string,
   TAccountVault extends string | AccountMeta<string> = string,
-  TAccountAdminCollateral extends string | AccountMeta<string> = string,
+  TAccountCreatorCollateral extends string | AccountMeta<string> = string,
   TAccountTokenProgram extends string | AccountMeta<string> =
     "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
   TAccountSystemProgram extends string | AccountMeta<string> =
@@ -83,10 +83,10 @@ export type CreatePredictionInstruction<
   InstructionWithData<ReadonlyUint8Array> &
   InstructionWithAccounts<
     [
-      TAccountAdmin extends string
-        ? WritableSignerAccount<TAccountAdmin> &
-            AccountSignerMeta<TAccountAdmin>
-        : TAccountAdmin,
+      TAccountCreator extends string
+        ? WritableSignerAccount<TAccountCreator> &
+            AccountSignerMeta<TAccountCreator>
+        : TAccountCreator,
       TAccountExchange extends string
         ? ReadonlyAccount<TAccountExchange>
         : TAccountExchange,
@@ -102,9 +102,9 @@ export type CreatePredictionInstruction<
       TAccountVault extends string
         ? WritableAccount<TAccountVault>
         : TAccountVault,
-      TAccountAdminCollateral extends string
-        ? WritableAccount<TAccountAdminCollateral>
-        : TAccountAdminCollateral,
+      TAccountCreatorCollateral extends string
+        ? WritableAccount<TAccountCreatorCollateral>
+        : TAccountCreatorCollateral,
       TAccountTokenProgram extends string
         ? ReadonlyAccount<TAccountTokenProgram>
         : TAccountTokenProgram,
@@ -176,7 +176,7 @@ export function getCreatePredictionInstructionDataCodec(): Codec<
 }
 
 export type CreatePredictionAsyncInput<
-  TAccountAdmin extends InstructionSignerInput = InstructionSignerInput,
+  TAccountCreator extends InstructionSignerInput = InstructionSignerInput,
   TAccountExchange extends InstructionAccountInput = InstructionAccountInput,
   TAccountOracleMarket extends InstructionAccountInput =
     InstructionAccountInput,
@@ -184,21 +184,25 @@ export type CreatePredictionAsyncInput<
   TAccountCollateralMint extends InstructionAccountInput =
     InstructionAccountInput,
   TAccountVault extends InstructionAccountInput = InstructionAccountInput,
-  TAccountAdminCollateral extends InstructionAccountInput =
+  TAccountCreatorCollateral extends InstructionAccountInput =
     InstructionAccountInput,
   TAccountTokenProgram extends InstructionAccountInput =
     InstructionAccountInput,
   TAccountSystemProgram extends InstructionAccountInput =
     InstructionAccountInput,
 > = {
-  admin: TAccountAdmin;
+  /**
+   * The exchange admin, or for a price market also its oracle market's oracle authority (the
+   * keeper), which already decides the settlement price and so needs no extra trust.
+   */
+  creator: TAccountCreator;
   exchange?: TAccountExchange;
   /** The perps market that settles a price market; omit for a custom question. */
   oracleMarket?: TAccountOracleMarket;
   prediction?: TAccountPrediction;
   collateralMint: TAccountCollateralMint;
   vault?: TAccountVault;
-  adminCollateral: TAccountAdminCollateral;
+  creatorCollateral: TAccountCreatorCollateral;
   tokenProgram?: TAccountTokenProgram;
   systemProgram?: TAccountSystemProgram;
   id: CreatePredictionInstructionDataArgs["id"];
@@ -211,25 +215,25 @@ export type CreatePredictionAsyncInput<
 };
 
 export async function getCreatePredictionInstructionAsync<
-  TAccountAdmin extends InstructionSignerInput,
+  TAccountCreator extends InstructionSignerInput,
   TAccountExchange extends InstructionAccountInput,
   TAccountOracleMarket extends InstructionAccountInput,
   TAccountPrediction extends InstructionAccountInput,
   TAccountCollateralMint extends InstructionAccountInput,
   TAccountVault extends InstructionAccountInput,
-  TAccountAdminCollateral extends InstructionAccountInput,
+  TAccountCreatorCollateral extends InstructionAccountInput,
   TAccountTokenProgram extends InstructionAccountInput,
   TAccountSystemProgram extends InstructionAccountInput,
   TProgramAddress extends Address = typeof MY_DEFI_DAPP_PROGRAM_ADDRESS,
 >(
   input: CreatePredictionAsyncInput<
-    TAccountAdmin,
+    TAccountCreator,
     TAccountExchange,
     TAccountOracleMarket,
     TAccountPrediction,
     TAccountCollateralMint,
     TAccountVault,
-    TAccountAdminCollateral,
+    TAccountCreatorCollateral,
     TAccountTokenProgram,
     TAccountSystemProgram
   >,
@@ -240,8 +244,8 @@ export async function getCreatePredictionInstructionAsync<
   CreatePredictionInstruction<
     TProgramAddress,
     ResolvedInstructionAccountMeta<
-      TAccountAdmin,
-      InstructionAccountInputAddress<TAccountAdmin>
+      TAccountCreator,
+      InstructionAccountInputAddress<TAccountCreator>
     >,
     ResolvedInstructionAccountMeta<
       TAccountExchange,
@@ -264,8 +268,8 @@ export async function getCreatePredictionInstructionAsync<
       InstructionAccountInputAddress<TAccountVault>
     >,
     ResolvedInstructionAccountMeta<
-      TAccountAdminCollateral,
-      InstructionAccountInputAddress<TAccountAdminCollateral>
+      TAccountCreatorCollateral,
+      InstructionAccountInputAddress<TAccountCreatorCollateral>
     >,
     ResolvedInstructionAccountMeta<
       TAccountTokenProgram,
@@ -290,7 +294,7 @@ export async function getCreatePredictionInstructionAsync<
 
   // Original accounts.
   const originalAccounts = {
-    admin: { value: input.admin ?? null, isSigner: true, isWritable: true },
+    creator: { value: input.creator ?? null, isSigner: true, isWritable: true },
     exchange: {
       value: input.exchange ?? null,
       isSigner: false,
@@ -312,8 +316,8 @@ export async function getCreatePredictionInstructionAsync<
       isWritable: false,
     },
     vault: { value: input.vault ?? null, isSigner: false, isWritable: true },
-    adminCollateral: {
-      value: input.adminCollateral ?? null,
+    creatorCollateral: {
+      value: input.creatorCollateral ?? null,
       isSigner: false,
       isWritable: true,
     },
@@ -368,13 +372,13 @@ export async function getCreatePredictionInstructionAsync<
 
   return Object.freeze({
     accounts: [
-      getAccountMeta("admin", accounts.admin),
+      getAccountMeta("creator", accounts.creator),
       getAccountMeta("exchange", accounts.exchange),
       getAccountMeta("oracleMarket", accounts.oracleMarket),
       getAccountMeta("prediction", accounts.prediction),
       getAccountMeta("collateralMint", accounts.collateralMint),
       getAccountMeta("vault", accounts.vault),
-      getAccountMeta("adminCollateral", accounts.adminCollateral),
+      getAccountMeta("creatorCollateral", accounts.creatorCollateral),
       getAccountMeta("tokenProgram", accounts.tokenProgram),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
@@ -385,8 +389,8 @@ export async function getCreatePredictionInstructionAsync<
   } as CreatePredictionInstruction<
     TProgramAddress,
     ResolvedInstructionAccountMeta<
-      TAccountAdmin,
-      InstructionAccountInputAddress<TAccountAdmin>
+      TAccountCreator,
+      InstructionAccountInputAddress<TAccountCreator>
     >,
     ResolvedInstructionAccountMeta<
       TAccountExchange,
@@ -409,8 +413,8 @@ export async function getCreatePredictionInstructionAsync<
       InstructionAccountInputAddress<TAccountVault>
     >,
     ResolvedInstructionAccountMeta<
-      TAccountAdminCollateral,
-      InstructionAccountInputAddress<TAccountAdminCollateral>
+      TAccountCreatorCollateral,
+      InstructionAccountInputAddress<TAccountCreatorCollateral>
     >,
     ResolvedInstructionAccountMeta<
       TAccountTokenProgram,
@@ -424,7 +428,7 @@ export async function getCreatePredictionInstructionAsync<
 }
 
 export type CreatePredictionInput<
-  TAccountAdmin extends InstructionSignerInput = InstructionSignerInput,
+  TAccountCreator extends InstructionSignerInput = InstructionSignerInput,
   TAccountExchange extends InstructionAccountInput = InstructionAccountInput,
   TAccountOracleMarket extends InstructionAccountInput =
     InstructionAccountInput,
@@ -432,21 +436,25 @@ export type CreatePredictionInput<
   TAccountCollateralMint extends InstructionAccountInput =
     InstructionAccountInput,
   TAccountVault extends InstructionAccountInput = InstructionAccountInput,
-  TAccountAdminCollateral extends InstructionAccountInput =
+  TAccountCreatorCollateral extends InstructionAccountInput =
     InstructionAccountInput,
   TAccountTokenProgram extends InstructionAccountInput =
     InstructionAccountInput,
   TAccountSystemProgram extends InstructionAccountInput =
     InstructionAccountInput,
 > = {
-  admin: TAccountAdmin;
+  /**
+   * The exchange admin, or for a price market also its oracle market's oracle authority (the
+   * keeper), which already decides the settlement price and so needs no extra trust.
+   */
+  creator: TAccountCreator;
   exchange: TAccountExchange;
   /** The perps market that settles a price market; omit for a custom question. */
   oracleMarket?: TAccountOracleMarket;
   prediction: TAccountPrediction;
   collateralMint: TAccountCollateralMint;
   vault: TAccountVault;
-  adminCollateral: TAccountAdminCollateral;
+  creatorCollateral: TAccountCreatorCollateral;
   tokenProgram?: TAccountTokenProgram;
   systemProgram?: TAccountSystemProgram;
   id: CreatePredictionInstructionDataArgs["id"];
@@ -459,25 +467,25 @@ export type CreatePredictionInput<
 };
 
 export function getCreatePredictionInstruction<
-  TAccountAdmin extends InstructionSignerInput,
+  TAccountCreator extends InstructionSignerInput,
   TAccountExchange extends InstructionAccountInput,
   TAccountOracleMarket extends InstructionAccountInput,
   TAccountPrediction extends InstructionAccountInput,
   TAccountCollateralMint extends InstructionAccountInput,
   TAccountVault extends InstructionAccountInput,
-  TAccountAdminCollateral extends InstructionAccountInput,
+  TAccountCreatorCollateral extends InstructionAccountInput,
   TAccountTokenProgram extends InstructionAccountInput,
   TAccountSystemProgram extends InstructionAccountInput,
   TProgramAddress extends Address = typeof MY_DEFI_DAPP_PROGRAM_ADDRESS,
 >(
   input: CreatePredictionInput<
-    TAccountAdmin,
+    TAccountCreator,
     TAccountExchange,
     TAccountOracleMarket,
     TAccountPrediction,
     TAccountCollateralMint,
     TAccountVault,
-    TAccountAdminCollateral,
+    TAccountCreatorCollateral,
     TAccountTokenProgram,
     TAccountSystemProgram
   >,
@@ -487,8 +495,8 @@ export function getCreatePredictionInstruction<
 ): CreatePredictionInstruction<
   TProgramAddress,
   ResolvedInstructionAccountMeta<
-    TAccountAdmin,
-    InstructionAccountInputAddress<TAccountAdmin>
+    TAccountCreator,
+    InstructionAccountInputAddress<TAccountCreator>
   >,
   ResolvedInstructionAccountMeta<
     TAccountExchange,
@@ -511,8 +519,8 @@ export function getCreatePredictionInstruction<
     InstructionAccountInputAddress<TAccountVault>
   >,
   ResolvedInstructionAccountMeta<
-    TAccountAdminCollateral,
-    InstructionAccountInputAddress<TAccountAdminCollateral>
+    TAccountCreatorCollateral,
+    InstructionAccountInputAddress<TAccountCreatorCollateral>
   >,
   ResolvedInstructionAccountMeta<
     TAccountTokenProgram,
@@ -536,7 +544,7 @@ export function getCreatePredictionInstruction<
 
   // Original accounts.
   const originalAccounts = {
-    admin: { value: input.admin ?? null, isSigner: true, isWritable: true },
+    creator: { value: input.creator ?? null, isSigner: true, isWritable: true },
     exchange: {
       value: input.exchange ?? null,
       isSigner: false,
@@ -558,8 +566,8 @@ export function getCreatePredictionInstruction<
       isWritable: false,
     },
     vault: { value: input.vault ?? null, isSigner: false, isWritable: true },
-    adminCollateral: {
-      value: input.adminCollateral ?? null,
+    creatorCollateral: {
+      value: input.creatorCollateral ?? null,
       isSigner: false,
       isWritable: true,
     },
@@ -594,13 +602,13 @@ export function getCreatePredictionInstruction<
 
   return Object.freeze({
     accounts: [
-      getAccountMeta("admin", accounts.admin),
+      getAccountMeta("creator", accounts.creator),
       getAccountMeta("exchange", accounts.exchange),
       getAccountMeta("oracleMarket", accounts.oracleMarket),
       getAccountMeta("prediction", accounts.prediction),
       getAccountMeta("collateralMint", accounts.collateralMint),
       getAccountMeta("vault", accounts.vault),
-      getAccountMeta("adminCollateral", accounts.adminCollateral),
+      getAccountMeta("creatorCollateral", accounts.creatorCollateral),
       getAccountMeta("tokenProgram", accounts.tokenProgram),
       getAccountMeta("systemProgram", accounts.systemProgram),
     ],
@@ -611,8 +619,8 @@ export function getCreatePredictionInstruction<
   } as CreatePredictionInstruction<
     TProgramAddress,
     ResolvedInstructionAccountMeta<
-      TAccountAdmin,
-      InstructionAccountInputAddress<TAccountAdmin>
+      TAccountCreator,
+      InstructionAccountInputAddress<TAccountCreator>
     >,
     ResolvedInstructionAccountMeta<
       TAccountExchange,
@@ -635,8 +643,8 @@ export function getCreatePredictionInstruction<
       InstructionAccountInputAddress<TAccountVault>
     >,
     ResolvedInstructionAccountMeta<
-      TAccountAdminCollateral,
-      InstructionAccountInputAddress<TAccountAdminCollateral>
+      TAccountCreatorCollateral,
+      InstructionAccountInputAddress<TAccountCreatorCollateral>
     >,
     ResolvedInstructionAccountMeta<
       TAccountTokenProgram,
@@ -655,14 +663,18 @@ export type ParsedCreatePredictionInstruction<
 > = {
   programAddress: Address<TProgram>;
   accounts: {
-    admin: TAccountMetas[0];
+    /**
+     * The exchange admin, or for a price market also its oracle market's oracle authority (the
+     * keeper), which already decides the settlement price and so needs no extra trust.
+     */
+    creator: TAccountMetas[0];
     exchange: TAccountMetas[1];
     /** The perps market that settles a price market; omit for a custom question. */
     oracleMarket?: TAccountMetas[2] | undefined;
     prediction: TAccountMetas[3];
     collateralMint: TAccountMetas[4];
     vault: TAccountMetas[5];
-    adminCollateral: TAccountMetas[6];
+    creatorCollateral: TAccountMetas[6];
     tokenProgram: TAccountMetas[7];
     systemProgram: TAccountMetas[8];
   };
@@ -701,13 +713,13 @@ export function parseCreatePredictionInstruction<
   return {
     programAddress: instruction.programAddress,
     accounts: {
-      admin: getNextAccount(),
+      creator: getNextAccount(),
       exchange: getNextAccount(),
       oracleMarket: getNextOptionalAccount(),
       prediction: getNextAccount(),
       collateralMint: getNextAccount(),
       vault: getNextAccount(),
-      adminCollateral: getNextAccount(),
+      creatorCollateral: getNextAccount(),
       tokenProgram: getNextAccount(),
       systemProgram: getNextAccount(),
     },

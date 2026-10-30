@@ -19,6 +19,8 @@ import {
   getAddressEncoder,
   getBytesDecoder,
   getBytesEncoder,
+  getI128Decoder,
+  getI128Encoder,
   getI64Decoder,
   getI64Encoder,
   getStructDecoder,
@@ -75,6 +77,18 @@ export type Market = {
   shortOpenInterest: bigint;
   shortBase: bigint;
   bump: number;
+  /** Hourly funding rate when all open interest is on one side, scaled by BORROW_RATE_SCALE. */
+  maxHourlyFundingRate: bigint;
+  /**
+   * Current hourly funding rate, scaled by BORROW_RATE_SCALE: positive when longs pay shorts.
+   * It is max_hourly_funding_rate * (long OI - short OI) / (long OI + short OI).
+   */
+  fundingRate: bigint;
+  /** Funding paid per 1 USD of long size since funding started (shorts receive the same amount). */
+  cumulativeFundingIndex: bigint;
+  /** Borrow fees plus funding owed per 1 USD of size, per side. Positions settle against these. */
+  longFeeIndex: bigint;
+  shortFeeIndex: bigint;
 };
 
 export type MarketArgs = {
@@ -96,6 +110,18 @@ export type MarketArgs = {
   shortOpenInterest: number | bigint;
   shortBase: number | bigint;
   bump: number;
+  /** Hourly funding rate when all open interest is on one side, scaled by BORROW_RATE_SCALE. */
+  maxHourlyFundingRate: number | bigint;
+  /**
+   * Current hourly funding rate, scaled by BORROW_RATE_SCALE: positive when longs pay shorts.
+   * It is max_hourly_funding_rate * (long OI - short OI) / (long OI + short OI).
+   */
+  fundingRate: number | bigint;
+  /** Funding paid per 1 USD of long size since funding started (shorts receive the same amount). */
+  cumulativeFundingIndex: number | bigint;
+  /** Borrow fees plus funding owed per 1 USD of size, per side. Positions settle against these. */
+  longFeeIndex: number | bigint;
+  shortFeeIndex: number | bigint;
 };
 
 /** Gets the encoder for {@link MarketArgs} account data. */
@@ -118,6 +144,11 @@ export function getMarketEncoder(): FixedSizeEncoder<MarketArgs> {
       ["shortOpenInterest", getU64Encoder()],
       ["shortBase", getU128Encoder()],
       ["bump", getU8Encoder()],
+      ["maxHourlyFundingRate", getU64Encoder()],
+      ["fundingRate", getI64Encoder()],
+      ["cumulativeFundingIndex", getI128Encoder()],
+      ["longFeeIndex", getI128Encoder()],
+      ["shortFeeIndex", getI128Encoder()],
     ]),
     (value) => ({ ...value, discriminator: MARKET_DISCRIMINATOR }),
   );
@@ -142,6 +173,11 @@ export function getMarketDecoder(): FixedSizeDecoder<Market> {
     ["shortOpenInterest", getU64Decoder()],
     ["shortBase", getU128Decoder()],
     ["bump", getU8Decoder()],
+    ["maxHourlyFundingRate", getU64Decoder()],
+    ["fundingRate", getI64Decoder()],
+    ["cumulativeFundingIndex", getI128Decoder()],
+    ["longFeeIndex", getI128Decoder()],
+    ["shortFeeIndex", getI128Decoder()],
   ]);
 }
 
@@ -220,5 +256,5 @@ export async function fetchAllMaybeMarket(
 }
 
 export function getMarketSize(): number {
-  return 194;
+  return 258;
 }

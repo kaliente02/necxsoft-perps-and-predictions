@@ -107,23 +107,71 @@ pub struct Market {
     pub short_open_interest: u64,
     pub short_base: u128,
     pub bump: u8,
+    // Funding fields, appended so `configure_market` can migrate older (shorter) accounts in place.
+    /// Hourly funding rate when all open interest is on one side, scaled by BORROW_RATE_SCALE.
+    pub max_hourly_funding_rate: u64,
+    /// Current hourly funding rate, scaled by BORROW_RATE_SCALE: positive when longs pay shorts.
+    /// It is max_hourly_funding_rate * (long OI - short OI) / (long OI + short OI).
+    pub funding_rate: i64,
+    /// Funding paid per 1 USD of long size since funding started (shorts receive the same amount).
+    pub cumulative_funding_index: i128,
+    /// Borrow fees plus funding owed per 1 USD of size, per side. Positions settle against these.
+    pub long_fee_index: i128,
+    pub short_fee_index: i128,
 }
 
 impl Market {
-    pub fn accrue_borrow(&mut self, now: i64) -> Result<()> {
+    /// Accrue borrow fees and funding since the last update at the rates in force since then.
+    ///
+    /// Both sides pay the borrow fee. The heavier side pays funding and the lighter side
+    /// receives it at the same rate, from the pool, so the pool always nets
+    /// rate * (heavy OI - light OI) and funding never costs LPs.
+    pub fn accrue_fees(&mut self, now: i64) -> Result<()> {
         let elapsed = now.saturating_sub(self.last_borrow_update);
         if elapsed > 0 {
-            let delta = (self.hourly_borrow_rate as u128)
+            let borrow = (self.hourly_borrow_rate as u128)
                 .checked_mul(elapsed as u128)
                 .ok_or(ErrorCode::MathOverflow)?
                 / SECONDS_PER_HOUR as u128;
+            let funding = self.funding_rate as i128 * elapsed as i128 / SECONDS_PER_HOUR as i128;
             self.cumulative_borrow_index = self
                 .cumulative_borrow_index
-                .checked_add(delta)
+                .checked_add(borrow)
+                .ok_or(ErrorCode::MathOverflow)?;
+            self.cumulative_funding_index = self
+                .cumulative_funding_index
+                .checked_add(funding)
+                .ok_or(ErrorCode::MathOverflow)?;
+            let borrow = borrow as i128;
+            self.long_fee_index = self
+                .long_fee_index
+                .checked_add(borrow + funding)
+                .ok_or(ErrorCode::MathOverflow)?;
+            self.short_fee_index = self
+                .short_fee_index
+                .checked_add(borrow - funding)
                 .ok_or(ErrorCode::MathOverflow)?;
             self.last_borrow_update = now;
         }
         Ok(())
+    }
+
+    pub fn fee_index(&self, side: Side) -> i128 {
+        match side {
+            Side::Long => self.long_fee_index,
+            Side::Short => self.short_fee_index,
+        }
+    }
+
+    /// Re-derive the funding rate from the open-interest skew. Call after accrue_fees.
+    pub fn update_funding_rate(&mut self) {
+        let long = self.long_open_interest as i128;
+        let short = self.short_open_interest as i128;
+        self.funding_rate = if long + short == 0 {
+            0
+        } else {
+            (self.max_hourly_funding_rate as i128 * (long - short) / (long + short)) as i64
+        };
     }
 
     pub fn fresh_price(&self, now: i64, max_age_secs: u32) -> Result<u64> {
@@ -150,6 +198,7 @@ impl Market {
         *oi = oi.checked_add(size_usd).ok_or(ErrorCode::MathOverflow)?;
         *total_base = total_base.checked_add(base).ok_or(ErrorCode::MathOverflow)?;
         require!(*oi <= self.max_open_interest, ErrorCode::MarketOpenInterestCap);
+        self.update_funding_rate();
         Ok(())
     }
 
@@ -160,6 +209,7 @@ impl Market {
         };
         *oi = oi.checked_sub(size_usd).ok_or(ErrorCode::MathOverflow)?;
         *total_base = total_base.checked_sub(base).ok_or(ErrorCode::MathOverflow)?;
+        self.update_funding_rate();
         Ok(())
     }
 }
@@ -178,7 +228,10 @@ pub struct Position {
     pub base: u128,
     /// Size-weighted average entry price.
     pub entry_price: u64,
-    pub entry_borrow_index: u128,
+    /// The market's fee index for this side (borrow + funding) when fees were last settled.
+    /// Positions opened before funding stored the borrow index here as a u128; the bytes of
+    /// those non-negative values read the same as an i128.
+    pub entry_borrow_index: i128,
     pub opened_at: i64,
     pub last_updated: i64,
     pub bump: u8,
@@ -187,9 +240,10 @@ pub struct Position {
 /// Result of marking a position to market.
 pub struct Valuation {
     pub pnl: i128,
-    pub borrow_fee: u64,
+    /// Borrow fees plus funding owed since the last settlement; negative when funding received exceeds them.
+    pub accrued_fees: i128,
     pub close_fee: u64,
-    /// collateral + pnl - borrow_fee - close_fee
+    /// collateral + pnl - accrued_fees - close_fee
     pub equity: i128,
 }
 
@@ -202,21 +256,20 @@ impl Position {
         }
     }
 
-    pub fn borrow_fee(&self, market: &Market) -> u64 {
-        let delta = market
-            .cumulative_borrow_index
-            .saturating_sub(self.entry_borrow_index);
-        mul_div(self.size_usd as u128, delta, BORROW_RATE_SCALE) as u64
+    /// Borrow fees plus funding owed since the last settlement (negative = owed to the position).
+    pub fn accrued_fees(&self, market: &Market) -> i128 {
+        let delta = market.fee_index(self.side) - self.entry_borrow_index;
+        (self.size_usd as i128).saturating_mul(delta) / BORROW_RATE_SCALE as i128
     }
 
     pub fn value(&self, market: &Market, price: u64, params: &RiskParams) -> Valuation {
         let pnl = self.pnl(price);
-        let borrow_fee = self.borrow_fee(market);
+        let accrued_fees = self.accrued_fees(market);
         let close_fee = bps_of(self.size_usd, params.trade_fee_bps);
-        let equity = self.collateral as i128 + pnl - borrow_fee as i128 - close_fee as i128;
+        let equity = self.collateral as i128 + pnl - accrued_fees - close_fee as i128;
         Valuation {
             pnl,
-            borrow_fee,
+            accrued_fees,
             close_fee,
             equity,
         }
@@ -235,6 +288,16 @@ pub enum OrderKind {
     TakeProfit,
     /// Closes some or all of a position once the price moves against it.
     StopLoss,
+    /// Opens (or adds to) a position once the price breaks out through the trigger: a long
+    /// buys strength and a short sells weakness. Escrows collateral like a limit order.
+    StopEntry,
+}
+
+impl OrderKind {
+    /// Limit and stop-entry orders open positions; take-profits and stop-losses close them.
+    pub fn opens(self) -> bool {
+        matches!(self, OrderKind::Limit | OrderKind::StopEntry)
+    }
 }
 
 /// A resting order filled by a keeper once the oracle price crosses `trigger_price`.
@@ -248,9 +311,9 @@ pub struct Order {
     pub trigger_price: u64,
     /// true: fills when price >= trigger_price; false: when price <= trigger_price.
     pub trigger_above: bool,
-    /// Limit: size to open. Take-profit / stop-loss: size to close, 0 = the entire position.
+    /// Limit / stop entry: size to open. Take-profit / stop-loss: size to close, 0 = the entire position.
     pub size_usd: u64,
-    /// Limit only: collateral escrowed in the vault until the order fills or is cancelled.
+    /// Limit / stop entry: collateral escrowed in the vault until the order fills or is cancelled.
     pub collateral: u64,
     /// Client-chosen id, part of the PDA seeds so an owner can hold many orders.
     pub id: u64,
@@ -269,6 +332,8 @@ impl Order {
             (OrderKind::TakeProfit, Side::Short) => false,
             (OrderKind::StopLoss, Side::Long) => false,
             (OrderKind::StopLoss, Side::Short) => true,
+            (OrderKind::StopEntry, Side::Long) => true,
+            (OrderKind::StopEntry, Side::Short) => false,
         }
     }
 
@@ -278,6 +343,82 @@ impl Order {
         } else {
             price <= self.trigger_price
         }
+    }
+}
+
+/// One hourly snapshot of a market, for funding and open-interest charts.
+#[zero_copy]
+#[derive(Default)]
+pub struct HourlySample {
+    pub time: i64,
+    pub price: u64,
+    /// Hourly funding rate at the time of the sample (BORROW_RATE_SCALE, + = longs pay).
+    pub funding_rate: i64,
+    /// Market::cumulative_funding_index at the sample; differences give the realized average rate.
+    pub cumulative_funding_index: i64,
+    pub long_open_interest: u64,
+    pub short_open_interest: u64,
+}
+
+/// Ring buffer of a market's hourly samples, written by `update_price` at most once an hour.
+#[account(zero_copy)]
+pub struct MarketHistory {
+    /// Slot the next sample is written to.
+    pub head: u32,
+    pub count: u32,
+    pub samples: [HourlySample; HISTORY_LEN],
+}
+
+impl MarketHistory {
+    /// Record a sample unless one was already taken this hour.
+    pub fn record(&mut self, market: &Market, now: i64) {
+        if self.count > 0 {
+            let last = (self.head as usize + HISTORY_LEN - 1) % HISTORY_LEN;
+            if self.samples[last].time.div_euclid(SECONDS_PER_HOUR) >= now.div_euclid(SECONDS_PER_HOUR) {
+                return;
+            }
+        }
+        self.samples[self.head as usize] = HourlySample {
+            time: now,
+            price: market.price,
+            funding_rate: market.funding_rate,
+            cumulative_funding_index: market.cumulative_funding_index as i64,
+            long_open_interest: market.long_open_interest,
+            short_open_interest: market.short_open_interest,
+        };
+        self.head = ((self.head as usize + 1) % HISTORY_LEN) as u32;
+        self.count = (self.count + 1).min(HISTORY_LEN as u32);
+    }
+}
+
+#[zero_copy]
+#[derive(Default)]
+pub struct LiquidationRecord {
+    pub owner: Pubkey,
+    pub market: Pubkey,
+    pub time: i64,
+    pub price: u64,
+    pub size_usd: u64,
+    pub collateral: u64,
+    pub liquidator_reward: u64,
+    /// Side as u8 (0 = long, 1 = short).
+    pub side: u8,
+    pub _padding: [u8; 7],
+}
+
+/// Ring buffer of the exchange's most recent liquidations, for the public feed.
+#[account(zero_copy)]
+pub struct LiquidationFeed {
+    pub head: u32,
+    pub count: u32,
+    pub records: [LiquidationRecord; LIQUIDATION_FEED_LEN],
+}
+
+impl LiquidationFeed {
+    pub fn push(&mut self, record: LiquidationRecord) {
+        self.records[self.head as usize] = record;
+        self.head = ((self.head as usize + 1) % LIQUIDATION_FEED_LEN) as u32;
+        self.count = (self.count + 1).min(LIQUIDATION_FEED_LEN as u32);
     }
 }
 
@@ -386,8 +527,8 @@ pub enum Outcome {
 /// Every USDC that enters mints one complete set (1 YES + 1 NO share) and every USDC that leaves
 /// burns one, so `total_sets` USDC always backs the shares. The YES probability is
 /// `no_reserve / (yes_reserve + no_reserve)`. After resolution each winning share redeems 1 USDC.
-/// The admin seeds the pool and, after resolution, withdraws what the pool's shares and fees are
-/// worth. USDC sits in a per-market vault, separate from the perps pool.
+/// The creator (the admin, or the keeper for price markets) seeds the pool and, after resolution,
+/// withdraws what the pool's shares and fees are worth. USDC sits in a per-market vault, separate from the perps pool.
 #[account]
 #[derive(InitSpace)]
 pub struct PredictionMarket {

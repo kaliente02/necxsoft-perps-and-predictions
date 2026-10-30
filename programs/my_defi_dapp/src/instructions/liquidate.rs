@@ -33,6 +33,8 @@ pub struct Liquidate<'info> {
     pub liquidator_collateral: Box<Account<'info, TokenAccount>>,
     #[account(mut, address = exchange.vault)]
     pub vault: Box<Account<'info, TokenAccount>>,
+    #[account(mut, seeds = [LIQUIDATION_FEED_SEED], bump)]
+    pub liquidation_feed: AccountLoader<'info, LiquidationFeed>,
     pub token_program: Program<'info, Token>,
 }
 
@@ -45,7 +47,7 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
     let position = &accounts.position;
     let params = exchange.params;
 
-    market.accrue_borrow(now)?;
+    market.accrue_fees(now)?;
     let price = market.fresh_price(now, params.max_price_age_secs)?;
 
     let valuation = position.value(market, price, &params);
@@ -73,6 +75,18 @@ pub fn handle_liquidate(ctx: Context<Liquidate>) -> Result<()> {
         exchange,
         to_owner,
     )?;
+
+    accounts.liquidation_feed.load_mut()?.push(LiquidationRecord {
+        owner: position.owner,
+        market: market.key(),
+        time: now,
+        price,
+        size_usd: position.size_usd,
+        collateral: position.collateral,
+        liquidator_reward: reward,
+        side: position.side as u8,
+        _padding: [0; 7],
+    });
 
     emit!(PositionLiquidated {
         owner: position.owner,
